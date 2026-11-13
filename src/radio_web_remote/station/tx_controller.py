@@ -284,7 +284,14 @@ class TxController:
             await self._stop(reason)
 
     async def radio_lost(self) -> None:
-        """The radio link dropped. Clear any holder; reconnect sends TX off first."""
+        """The radio link dropped. Clear any holder; reconnect sends TX off first.
+
+        Only a link lost while someone held TX (or with an unkey already
+        unconfirmed) can mean the radio is still transmitting. A radio that is
+        simply off or unplugged while idle must not raise that alarm.
+        """
+        if self._holder is None and not self._unkey_pending:
+            return
         await self._stop(StopReason.RADIO_ERROR, force=True)
 
     async def power_changed(self, raw: int) -> None:

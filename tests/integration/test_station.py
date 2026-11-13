@@ -217,3 +217,18 @@ async def test_stale_poll_does_not_overwrite_newer_write(bench):
     await poll
     bench.sim.reply_delay_s = 0.003
     assert st.state.frequency_hz == 21_074_000
+
+
+async def test_idle_radio_loss_does_not_claim_tx_unconfirmed(bench):
+    # Found 2026-11-13: with the radio off and nobody transmitting, every client
+    # was shown "TX off not confirmed: the radio may still be transmitting".
+    bench.sim.silent = True
+    await wait_for(lambda: not bench.station.state.connected)
+    await asyncio.sleep(0.3)
+    assert not bench.station.state.tx.unkey_unconfirmed
+
+
+async def test_radio_loss_while_keyed_still_warns(bench):
+    await bench.station.tx.ptt_down(ALICE)
+    bench.sim.silent = True
+    await wait_for(lambda: bench.station.state.tx.unkey_unconfirmed, timeout=3.0)
