@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.12"]
+        include:
+          - os: ubuntu-latest
+            python: "3.11"  # Raspberry Pi OS Bookworm
+          - os: ubuntu-latest
+            python: "3.13"
+    steps:
+      # Actions pinned to commit SHAs (tag in the comment).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Same path a member without admin rights uses: uv inside a venv.
+      - name: Install uv into .tools
+        shell: bash
+        run: |
+          python -m venv .tools
+          if [ -x .tools/bin/python ]; then T=.tools/bin; else T=.tools/Scripts; fi
+          "$T/python" -m pip install --quiet uv
+          echo "$PWD/$T" >> "$GITHUB_PATH"
+
+      - name: Sync environment (locked)
+        run: uv sync --locked --python ${{ matrix.python }}
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Tests
+        run: uv run pytest -o faulthandler_timeout=60

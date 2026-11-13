@@ -43,11 +43,14 @@ radio-web-remote/
   config.example.yaml         # every key, documented default
   LICENSE  README.md  CONTRIBUTING.md  SECURITY.md  CHANGELOG.md  THIRD_PARTY_NOTICES.md
   src/radio_web_remote/
-    __main__.py  cli.py        # serve, init (admin + certs), user, doctor, cert renew
+    __main__.py  cli.py        # P0: config check, drivers, sim, probe. Later: serve, init, user, doctor
+    sources.py                 # Source citation type
     config.py                  # pydantic models for config.yaml
     paths.py                   # per-OS data dir
-    transport/
-      serial_port.py           # threaded serial reader/writer, priority queue (protocol-agnostic)
+    transport/                 # protocol-agnostic byte links
+      base.py                  # priority queue + urgent (PTT) path
+      serial_port.py           # threaded serial reader, DTR/RTS low before open
+      loopback.py              # in-process pair for the simulator
     protocols/
       civ/                     # Icom CI-V; future yaesu_cat/, kenwood/ are siblings
         frame.py               # parser/encoder, echo + collision handling
@@ -56,9 +59,10 @@ radio-web-remote/
         scope.py               # division reassembly per model
     radios/
       base.py                  # vendor-neutral types + RadioDriver interface
-      capabilities.py          # schema (each entry needs a source)
       registry.py              # "icom.ic7300" -> driver; entry points later
       icom/
+        model.py               # capability table schema (each entry needs a source)
+        civ_driver.py          # RadioDriver over CI-V, driven by a table
         ic7300.py  ic705.py  ic9700.py
     session/
       radio_session.py         # per-radio owner of transport, driver, audio, tx
@@ -81,13 +85,12 @@ radio-web-remote/
       tls.py                   # CA + leaf generation, renewal
       users.py                 # SQLite, Argon2id, roles, limits
       audit.py                 # JSON Lines, rotation
+    sim/
+      icom.py                  # fake radio: pure core, loopback and PTY runners
     static/                    # client SPA, no build step
       index.html  setup.html
       js/  (app.js, ws.js, ptt.js, tuning.js, waterfall.js, audio-*.js, worklets/)
       css/
-  sim/
-    icom_sim.py                # fake radio, in-process and PTY modes
-    scope_gen.py
   tests/
     unit/  integration/  e2e/  (Playwright)
     fixtures/                  # recorded/constructed CI-V frames per model
