@@ -21,6 +21,9 @@ button.small { min-height: 36px; padding: 0 10px; font-size: .9rem; background: 
 .txbar[data-state="tx"] { background: var(--tx); color: var(--tx-ink); }
 .txbar[data-state="pending"] { background: var(--warn); color: #000; }
 .txbar[data-state="held"] { background: var(--navy); color: #fff; }
+.txbar[data-state="danger"] { background: var(--tx); color: var(--tx-ink); animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .txbar[data-state="danger"] { animation: none; } }
 
 /* Frequency display: the drag-to-tune surface */
 .freq {

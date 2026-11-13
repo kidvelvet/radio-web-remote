@@ -423,3 +423,22 @@ def test_successful_logins_do_not_count_toward_rate_limit(env):
     c = env["client"]
     for _ in range(15):
         assert login(c).status_code == 200
+
+
+def test_clients_warned_while_tx_off_unconfirmed(env):
+    # H7300-7 (2026-11-13): with USB pulled, the radio stayed keyed for about 43 s
+    # while the server could not reach it. Every client must see that.
+    c = env["client"]
+    login(c)
+    with wsc(c) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "ptt", "down": True})
+        recv_until(ws, keyed)
+        env["sim"].silent = True  # radio unreachable
+        ws.send_json({"type": "ptt", "down": False})
+        warn = recv_until(ws, lambda m: tx_state(m) and m["state"]["tx"]["unconfirmed"], limit=400)
+        assert warn["state"]["tx"]["transmitting"] is False
+        env["sim"].silent = False
+        recv_until(ws, lambda m: tx_state(m) and not m["state"]["tx"]["unconfirmed"], limit=800)
+    events = [json.loads(x)["event"] for x in (env["tmp"] / "audit.log").read_text().splitlines()]
+    assert "tx_off_unconfirmed" in events and "tx_off_confirmed" in events

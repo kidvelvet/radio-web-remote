@@ -47,13 +47,13 @@ third-party copy) or confirmed on hardware. Until then the row is a
 | RF gain | `14 02` + 2 bytes | 7300-FM p. 19-3 | 0000=min to 0255=max. Used. |
 | Squelch | `14 03` + 2 bytes | 7300-FM p. 19-3 | 0000=min to 0255=max. Used. |
 | RF power control | `14 0A` + 2 bytes | 7300-FM p. 19-3 | 0000=max CCW to 0255=max CW. A control position, not watts. Used, and for per-user power limits. |
-| Level byte layout | 2 BCD bytes, most significant pair first | 7300-FM p. 19-2 (BCD), p. 19-3 ("0000 to 0255") | Byte order not stated in words. **TODO(verify)** on hardware (H7300-8): a big-endian reply decodes to 0..255, a little-endian one would not. |
+| Level byte layout | 2 BCD bytes, most significant pair first | 7300-FM p. 19-2 (BCD), p. 19-3 ("0000 to 0255") | Byte order not stated in words. Confirmed on IC-7300 hardware 2026-11-13 (H7300-8): RF gain at max read `02 55`; RF power read `00 39` (15%) with the radio set to about 15 W. |
 | S-meter | `15 02`, read | 7300-FM p. 19-3 | 0000=S0, 0120=S9, 0241=S9+60 dB. Between points the driver interpolates linearly (an approximation; the manual gives only these points). |
 | Po meter | `15 11`, read | 7300-FM p. 19-3 | 0000=0%, 0143=50%, 0213=100%. Percent only; no watts given. |
 | SWR meter | `15 12`, read | 7300-FM p. 19-3 | 0000=1.0, 0048=1.5, 0080=2.0, 0120=3.0. Above 0120 the driver reports "over 3.0" rather than a number. |
 | ALC meter | `15 13`, read | 7300-FM p. 19-3 | 0000=Min. to 0120=Max. |
 | DATA mode | `1A 06` + on/off + filter | 7300-FM p. 19-6 (row), p. 19-9 (layout) | 00=OFF, 01=ON, then 01-03 filter. "When 00 is set, also set 00" as the filter. Used. |
-| Time-Out Timer (CI-V) | `1A 05 0029` | 7300-FM p. 19-4 | 00=OFF, 01=3 min, 02=5, 03=10, 04=20, 05=30 min. Not sent by this app (menu numbers did not match hardware for 0075); set it in the radio menu instead (docs/radio-setup.md). |
+| Time-Out Timer (CI-V) | `1A 05 0029` | 7300-FM p. 19-4 | 00=OFF, 01=3 min, 02=5, 03=10, 04=20, 05=30 min. Read `01` on the maintainer's radio after it was set to 3 min (2026-11-13), so this item number does match that firmware, unlike 0075. Not sent by this app; set it in the menu (docs/radio-setup.md). |
 | Not used yet (P1 later or P2+) | `11` ATT (00/20), `16 02` preamp (00-02), `16 12` AGC (00-03), `16 22` NB, `16 40` NR, `16 41` auto notch, `16 48` manual notch, `14 0D` notch position, `14 06` NR level, `14 12` NB level, `21 00/01/02` RIT freq / RIT on / ΔTX on, `0F` split, `07` VFO A/B, `1C 03` TX frequency, `25`/`26` selected/unselected VFO, `27 10/11` scope on / data output | 7300-FM pp. 19-3 to 19-11 | Collected 2026-11-13 with page citations; each gets a builder test before it is used. No XIT frequency command found, only ΔTX on/off. |
 | CI-V Transceive setting | `1A 05 0071`, 00 OFF / 01 ON | 7300-FM p. 19-5 | Read `01` with Transceive ON (H7300-6), but not checked with it OFF. Same firmware caveat as Echo Back. Not used yet. |
 | CI-V Output (for ANT) | `1A 05 0073` | 7300-FM p. 19-5 | p. 19-7 cites `1A 05 0157` for this, which the table lists as something else. Internal inconsistency; TODO(verify). |

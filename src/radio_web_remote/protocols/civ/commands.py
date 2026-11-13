@@ -48,10 +48,10 @@ class ReplyError(ValueError):
 
 
 # Level and meter data are printed as four digits, "0000 to 0255" (p. 19-3),
-# and data is BCD (p. 19-2), so two BCD bytes. TODO(verify): byte order is not
-# stated in words; most-significant pair first is assumed. Confirm on hardware:
-# a big-endian reply reads like 01 28, which little-endian would make 2801,
-# outside 0..255 (docs/hardware-test.md, H7300-8).
+# and data is BCD (p. 19-2), so two BCD bytes, most-significant pair first.
+# The manual does not say the byte order in words; confirmed on an IC-7300 on
+# 2026-11-13 (docs/hardware-test.md, H7300-8): RF gain at maximum read 02 55,
+# and RF power read 00 39 (15%) with the radio set to about 15 W.
 LEVEL_MAX = 255
 
 

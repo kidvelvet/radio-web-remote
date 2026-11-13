@@ -70,7 +70,7 @@ The rule is about control link malfunction, which the 2 s heartbeat timeout alre
 - The service manager (systemd, launchd, Task Scheduler) restarts the server, and startup sends TX off first (item 6). Target: unkey within seconds of a crash.
 - DTR/RTS PTT ("USB SEND" set to DTR or RTS) has the opposite failure mode: the OS deasserts the line when the port handle closes, including on process death. Opening the port never keys (H7300-3, macOS); whether the line drops on process death is TODO(verify) per OS and on hardware. Docs will explain this trade-off; CI-V remains the default as briefed.
 - The radio's own transmit time-out timer, where a model has one. TODO(verify) per model; if present, `docs/radio-setup.md` will recommend enabling it.
-- Unplugging the USB cable while keyed: radio behavior unknown. TODO(verify) on hardware, listed in `docs/hardware-test.md`.
+- Unplugging the USB cable while keyed: tested 2026-11-13 (H7300-7). The IC-7300 **stays in TX**; the server cannot reach it until the cable returns (about 43 s in the test). Mitigations added: every client shows "TX off not confirmed" while it lasts, and the audit log records when it started and when RX was finally confirmed. The radio's Time-Out Timer (CI-V) is the backstop that bounds it; docs/radio-setup.md recommends 3 min.
 
 ### D7. Control channel: one authenticated WSS per client
 

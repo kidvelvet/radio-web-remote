@@ -86,7 +86,7 @@ def serve(cfg: Config, data_dir: Path, simulate: bool = False, log_level: str = 
             log_level=log_level,
             proxy_headers=False,
             server_header=False,
-            ws="websockets",
+            ws="websockets-sansio",
             ws_max_size=64 * 1024,
             ws_ping_interval=20,
             lifespan="on",

@@ -11,7 +11,7 @@ from radio_web_remote.radios.icom.civ_driver import convert_meter
     ("value", "wire"), [(0, "0000"), (128, "0128"), (255, "0255"), (9, "0009")]
 )
 def test_level_bcd_big_endian(value, wire):
-    # "0000 to 0255" (p. 19-3), most significant pair first: TODO(verify) on hardware.
+    # "0000 to 0255" (p. 19-3), most significant pair first (confirmed on hardware, H7300-8).
     assert c.encode_level(value) == bytes.fromhex(wire)
     assert c.decode_level(bytes.fromhex(wire)) == value
 

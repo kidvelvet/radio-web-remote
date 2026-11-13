@@ -149,7 +149,10 @@ function renderTx(s, prev) {
   const tx = s.tx || {};
   const mine = tx.transmitting && app.ptt && app.hello && tx.holder === app.hello.user.callsign;
   const bar = $("txbar");
-  if (tx.transmitting && mine) {
+  if (tx.unconfirmed) {
+    bar.dataset.state = "danger";
+    $("txtext").textContent = "TX OFF NOT CONFIRMED: the radio may still be transmitting. Retrying.";
+  } else if (tx.transmitting && mine) {
     bar.dataset.state = tx.keyed ? "tx" : "pending";
     $("txtext").textContent = tx.keyed ? `ON AIR  ${tx.holder}` : "Keying...";
   } else if (tx.transmitting) {

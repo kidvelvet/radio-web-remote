@@ -118,6 +118,9 @@ class TxStatus:
     since: float | None = None  # wall clock (time.time) when TX started
     last_stop_reason: StopReason | None = None
     keyed: bool = False  # the radio acknowledged TX for the current holder
+    # TX off was sent but the radio has not confirmed RX: it may still be on
+    # the air (seen on hardware when the USB cable was pulled, H7300-7).
+    unkey_unconfirmed: bool = False
 
 
 class PttDriver(Protocol):
@@ -162,6 +165,7 @@ class TxController:
         self._last_heartbeat = 0.0
         self._unkey_pending = False
         self._unkey_failures = 0
+        self._unconfirmed_since = 0.0
         self._unkey_tasks: set[asyncio.Task[None]] = set()
         self._last_unkey_try = 0.0
         self._must_release: set[str] = set()
@@ -187,9 +191,17 @@ class TxController:
     def status(self) -> TxStatus:
         h = self._holder
         if h is None:
-            return TxStatus(False, last_stop_reason=self._last_stop)
+            return TxStatus(
+                False, last_stop_reason=self._last_stop, unkey_unconfirmed=self._unkey_failures > 0
+            )
         return TxStatus(
-            True, h.callsign, h.session_id, self._started_wall, self._last_stop, self._keyed
+            True,
+            h.callsign,
+            h.session_id,
+            self._started_wall,
+            self._last_stop,
+            self._keyed,
+            self._unkey_failures > 0,
         )
 
     @property
@@ -324,11 +336,20 @@ class TxController:
         except Exception as exc:  # RadioError, or anything unexpected: keep retrying
             if self._unkey_failures == 0:
                 log.critical("TX off NOT confirmed on %s: %s. Retrying.", self.radio_id, exc)
+                self._unconfirmed_since = self._clock()
+                self._emit_radio_audit("tx_off_unconfirmed", error=str(exc))
             self._unkey_failures += 1
             self._unkey_pending = True
+            if self._unkey_failures == 1:
+                self._notify()
         else:
             if self._unkey_failures:
-                log.warning("TX off confirmed on %s after retries", self.radio_id)
+                after = round(self._clock() - self._unconfirmed_since, 3)
+                log.warning("TX off confirmed on %s after %.1f s", self.radio_id, after)
+                self._emit_radio_audit("tx_off_confirmed", after_s=after)
+                self._unkey_failures = 0
+                self._unkey_pending = False
+                self._notify()
             self._unkey_failures = 0
             self._unkey_pending = False
 
@@ -349,6 +370,13 @@ class TxController:
                 await self._stop(StopReason.TIMEOUT)
         elif self._unkey_pending and now - self._last_unkey_try >= UNKEY_RETRY_S:
             await self._unkey()
+
+    def _emit_radio_audit(self, event: str, **fields: Any) -> None:
+        if self._audit is not None:
+            try:
+                self._audit({"event": event, "radio": self.radio_id, **fields})
+            except Exception:
+                log.exception("audit sink failed")
 
     def _emit_audit(self, event: str, op: Operator, **fields: Any) -> None:
         if self._audit is None:

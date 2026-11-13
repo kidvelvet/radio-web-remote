@@ -224,12 +224,17 @@ async def test_radio_error_on_key_is_reported_and_safe(rig):
     assert e.value.reason is DenyReason.RADIO_ERROR
     assert not rig.tx.status.transmitting
     assert rig.tx.unkey_unconfirmed  # it could not confirm RX either
+    assert rig.tx.status.unkey_unconfirmed  # shown to every client
+    assert any(a["event"] == "tx_off_unconfirmed" for a in rig.audit)
     rig.sim.silent = False
     for _ in range(100):  # watchdog keeps sending TX off until confirmed
         if not rig.tx.unkey_unconfirmed:
             break
         await asyncio.sleep(0.05)
     assert not rig.tx.unkey_unconfirmed and not rig.on_air
+    assert not rig.tx.status.unkey_unconfirmed
+    confirmed = [a for a in rig.audit if a["event"] == "tx_off_confirmed"]
+    assert confirmed and confirmed[0]["after_s"] > 0
 
 
 async def test_audit_records_start_and_stop(rig):

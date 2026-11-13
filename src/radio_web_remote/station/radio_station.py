@@ -78,6 +78,7 @@ class RadioState:
         d["tx"] = {
             "transmitting": self.tx.transmitting,
             "keyed": self.tx.keyed,
+            "unconfirmed": self.tx.unkey_unconfirmed,
             "holder": self.tx.holder_callsign,
             "since": self.tx.since,
             "last_stop": self.tx.last_stop_reason.value if self.tx.last_stop_reason else None,
