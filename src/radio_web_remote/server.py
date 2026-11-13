@@ -11,7 +11,6 @@ import uvicorn
 from fastapi import FastAPI
 
 from radio_web_remote.audio.backend import AudioBackend, SimAudioBackend, SoundDeviceBackend
-from radio_web_remote.audio.devices import AudioDeviceError, list_devices, resolve
 from radio_web_remote.config import Config, RadioConfig
 from radio_web_remote.radios.icom import MODELS
 from radio_web_remote.security.audit import AuditLog
@@ -53,25 +52,16 @@ def _real_audio(
     """Resolve the radio codec and optional host devices. Returns (radio, host, error)."""
     if not rc.audio.enabled:
         return None, None, "audio disabled in config"
-    try:
-        devices = list_devices()
-        radio = SoundDeviceBackend(
-            resolve(rc.audio.input_device, "input", devices),
-            resolve(rc.audio.output_device, "output", devices),
-            f"{rc.id} codec",
-        )
-        host = None
-        h = cfg.host_audio
-        if h.input_device is not None or h.output_device is not None:
-            host = SoundDeviceBackend(
-                resolve(h.input_device, "input", devices),
-                resolve(h.output_device, "output", devices),
-                "host",
-            )
-        return radio, host, None
-    except (AudioDeviceError, OSError) as exc:
-        log.warning("radio %s: audio unavailable: %s", rc.id, exc)
-        return None, None, str(exc)
+    # Devices are looked up when audio starts and again on every retry, so a
+    # radio that is off when the server starts gets audio once it is switched on.
+    radio = SoundDeviceBackend(
+        None, None, f"{rc.id} codec", refs=(rc.audio.input_device, rc.audio.output_device)
+    )
+    host = None
+    h = cfg.host_audio
+    if h.input_device is not None or h.output_device is not None:
+        host = SoundDeviceBackend(None, None, "host", refs=(h.input_device, h.output_device))
+    return radio, host, None
 
 
 def build_runtime(cfg: Config, data_dir: Path, simulate: bool = False) -> Runtime:

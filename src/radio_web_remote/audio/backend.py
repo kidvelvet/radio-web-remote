@@ -101,11 +101,21 @@ class AudioBackend(ABC):
 class SoundDeviceBackend(AudioBackend):
     """PortAudio via sounddevice. Opens at 16 kHz mono, or 48 kHz with our own resampling."""
 
-    def __init__(self, input_device: int | None, output_device: int | None, label: str) -> None:
+    def __init__(
+        self,
+        input_device: int | None,
+        output_device: int | None,
+        label: str,
+        refs: tuple[str | int | None, str | int | None] | None = None,
+    ) -> None:
+        """refs: config references ("auto", a name, an index) to look up again on each
+        start, so a radio switched on after the server still gets audio."""
         super().__init__()
         self.input_device = input_device
         self.output_device = output_device
         self.label = label
+        self.refs = refs
+        self._failed_once = False
         self._streams: list[Any] = []
         self._loop: asyncio.AbstractEventLoop | None = None
         self.device_rate = NET_RATE
@@ -126,9 +136,28 @@ class SoundDeviceBackend(AudioBackend):
                 continue
         raise OSError(f"{self.label}: device accepts neither 16 kHz nor 48 kHz mono int16")
 
+    def _resolve(self, sd: Any) -> None:
+        if self.refs is None:
+            return
+        from radio_web_remote.audio.devices import list_devices, resolve
+
+        if self._failed_once:
+            # PortAudio caches its device list; reload it to see newly plugged devices.
+            # Safe here: the router only retries while none of our streams are open.
+            sd._terminate()
+            sd._initialize()
+        devices = list_devices(sd)
+        self.input_device = resolve(self.refs[0], "input", devices)
+        self.output_device = resolve(self.refs[1], "output", devices)
+
     async def start(self) -> None:
         import sounddevice as sd
 
+        try:
+            self._resolve(sd)
+        except Exception:
+            self._failed_once = True
+            raise
         self._loop = asyncio.get_running_loop()
         self.device_rate = self._pick_rate(sd)
         factor = self.device_rate // NET_RATE  # 1 or 3
