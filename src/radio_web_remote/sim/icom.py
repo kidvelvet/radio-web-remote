@@ -193,6 +193,16 @@ def attach_loopback(sim: IcomSimulator, end: LoopbackEnd) -> None:
     end.on_data = on_data
 
 
+def loopback_transport(sim: IcomSimulator) -> LoopbackEnd:
+    """A fresh driver-side transport wired to this simulator (for RadioStation factories)."""
+    from radio_web_remote.transport.loopback import loopback_pair
+
+    host, radio_end = loopback_pair()
+    attach_loopback(sim, radio_end)
+    radio_end._open = True  # the radio side never writes through its queue; it is just "on"
+    return host
+
+
 def push_unsolicited(end: LoopbackEnd, data: bytes) -> None:
     """Deliver radio-originated bytes (transceive, junk) to the driver side."""
     peer = end.peer

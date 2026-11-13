@@ -149,6 +149,8 @@ class TxController:
         self._started_hz: int | None = None
         self._last_heartbeat = 0.0
         self._unkey_pending = False
+        self._unkey_failures = 0
+        self._unkey_tasks: set[asyncio.Task[None]] = set()
         self._last_unkey_try = 0.0
         self._must_release: set[str] = set()
         self._last_stop: StopReason | None = None
@@ -282,20 +284,30 @@ class TxController:
                     duration_s=round(self._clock() - self._started_mono, 3),
                     reason=reason.value,
                 )
+        # Pending until the radio confirms RX. Set before touching the radio so
+        # that if anything interrupts the unkey, the watchdog retries it.
+        self._unkey_pending = True
         self._notify()
-        await self._unkey()
+        # Run the unkey as its own task and shield it: cancelling the caller
+        # (a closing WebSocket, server shutdown) must not cancel TX off.
+        task = asyncio.ensure_future(self._unkey())
+        self._unkey_tasks.add(task)
+        task.add_done_callback(self._unkey_tasks.discard)
+        await asyncio.shield(task)
 
     async def _unkey(self) -> None:
         self._last_unkey_try = self._clock()
         try:
             await self.driver.unkey()
-        except RadioError as exc:
-            if not self._unkey_pending:
+        except Exception as exc:  # RadioError, or anything unexpected: keep retrying
+            if self._unkey_failures == 0:
                 log.critical("TX off NOT confirmed on %s: %s. Retrying.", self.radio_id, exc)
+            self._unkey_failures += 1
             self._unkey_pending = True
         else:
-            if self._unkey_pending:
+            if self._unkey_failures:
                 log.warning("TX off confirmed on %s after retries", self.radio_id)
+            self._unkey_failures = 0
             self._unkey_pending = False
 
     async def _watch(self) -> None:

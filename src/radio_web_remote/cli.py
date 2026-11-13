@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import sys
 import time
+from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -101,6 +104,136 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     return asyncio.run(_probe(args))
 
 
+# -- accounts, certificates, server ----------------------------------------
+
+
+def _data_dir(args: argparse.Namespace) -> Path:
+    from radio_web_remote import paths
+
+    return Path(args.data_dir) if args.data_dir else paths.data_dir()
+
+
+def _read_password(args: argparse.Namespace, prompt: str = "Password") -> str:
+    if getattr(args, "password_stdin", False):
+        return sys.stdin.readline().rstrip("\n")
+    first = getpass.getpass(f"{prompt}: ")
+    if getpass.getpass(f"{prompt} again: ") != first:
+        raise SystemExit("passwords do not match")
+    return first
+
+
+def _store(args: argparse.Namespace) -> Any:
+    from radio_web_remote.security.users import UserStore
+    from radio_web_remote.server import users_db
+
+    return UserStore(users_db(_data_dir(args)))
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    from radio_web_remote.security.tls import ensure_certificates, wanted_sans
+    from radio_web_remote.security.users import UserError
+    from radio_web_remote.station.tx_controller import Role
+
+    cfg = load_config(args.config)
+    store = _store(args)
+    if store.count_admins() == 0:
+        username = args.username or input("Admin username: ").strip()
+        callsign = (
+            args.callsign if args.callsign is not None else input("Callsign (blank if none): ")
+        )
+        try:
+            store.create_user(username, _read_password(args), Role.ADMIN, callsign)
+        except UserError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Created admin {username!r}.")
+    else:
+        print("An admin account already exists; leaving accounts alone.")
+    _files, changed = ensure_certificates(cfg, _data_dir(args))
+    print(f"TLS: {changed or 'certificates already in place'}")
+    print(f"Data folder: {_data_dir(args)}")
+    port = cfg.server.https_port
+    names = wanted_sans(cfg)
+    print("Clients can reach this server at, for example:")
+    for name in (
+        sorted(names.dns - {"localhost"})[:3] + [str(i) for i in sorted(names.ips, key=str)][:4]
+    ):
+        host = f"[{name}]" if ":" in name else name
+        print(f"  https://{host}:{port}/   (first time on a device: https://{host}:{port}/setup)")
+    return 0
+
+
+def _cmd_user(args: argparse.Namespace) -> int:
+    from radio_web_remote.security.users import UserError
+    from radio_web_remote.station.tx_controller import Role, TxLimits
+
+    store = _store(args)
+    try:
+        if args.user_command == "list":
+            for u in store.list_users():
+                flags = " (disabled)" if u.disabled else ""
+                bands = (
+                    "any band" if u.limits.bands_hz is None else f"{len(u.limits.bands_hz)} band(s)"
+                )
+                print(f"{u.username:16} {u.role.value:9} {u.callsign or '-':10} {bands}{flags}")
+        elif args.user_command == "add":
+            store.create_user(args.name, _read_password(args), Role(args.role), args.callsign or "")
+            print(f"Added {args.name}.")
+        elif args.user_command == "passwd":
+            store.set_password(args.name, _read_password(args, "New password"))
+            print("Password changed; that user's sessions were ended.")
+        elif args.user_command == "role":
+            if (
+                Role(args.role) is not Role.ADMIN
+                and store.get_user(args.name)
+                and store.get_user(args.name).role is Role.ADMIN
+                and store.count_admins() <= 1
+            ):
+                raise UserError("refusing to demote the last admin")
+            store.set_role(args.name, Role(args.role), args.callsign)
+            print("Role changed.")
+        elif args.user_command in ("disable", "enable"):
+            store.set_disabled(args.name, args.user_command == "disable")
+            print(f"{args.name} {args.user_command}d.")
+        elif args.user_command == "unlock":
+            store.unlock(args.name)
+            print("Unlocked.")
+        elif args.user_command == "delete":
+            user = store.get_user(args.name)
+            if user and user.role is Role.ADMIN and store.count_admins() <= 1:
+                raise UserError("refusing to delete the last admin")
+            store.delete_user(args.name)
+            print("Deleted.")
+        elif args.user_command == "limits":
+            ranges: tuple[tuple[int, int], ...] | None = None
+            if args.bands:
+                ranges = tuple(
+                    (int(lo), int(hi)) for lo, hi in (b.split("-") for b in args.bands.split(","))
+                )
+            store.set_limits(args.name, TxLimits(bands_hz=ranges))
+            print("Limits set." if ranges else "Band limits cleared.")
+    except (UserError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    import logging
+
+    from radio_web_remote.server import NoAdmin, serve
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    try:
+        serve(load_config(args.config), _data_dir(args), simulate=args.simulate)
+    except NoAdmin as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="radio-web-remote")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -130,6 +263,47 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--baud", type=int, default=115200)
     probe.add_argument("--address", help="CI-V address in hex, e.g. 94 (default: driver default)")
     probe.set_defaults(func=_cmd_probe)
+
+    def common(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--config", help="path to config.yaml")
+        sp.add_argument("--data-dir", help="state folder (default: per-OS app data folder)")
+
+    init = sub.add_parser("init", help="first run: create the admin account and certificates")
+    common(init)
+    init.add_argument("--username")
+    init.add_argument("--callsign")
+    init.add_argument("--password-stdin", action="store_true", help="read the password from stdin")
+    init.set_defaults(func=_cmd_init)
+
+    user = sub.add_parser("user", help="manage accounts")
+    common(user)
+    us = user.add_subparsers(dest="user_command", required=True)
+    us.add_parser("list")
+    add = us.add_parser("add")
+    add.add_argument("name")
+    add.add_argument("--role", choices=["admin", "operator", "listener"], default="operator")
+    add.add_argument("--callsign")
+    add.add_argument("--password-stdin", action="store_true")
+    pw = us.add_parser("passwd")
+    pw.add_argument("name")
+    pw.add_argument("--password-stdin", action="store_true")
+    role = us.add_parser("role")
+    role.add_argument("name")
+    role.add_argument("role", choices=["admin", "operator", "listener"])
+    role.add_argument("--callsign")
+    for verb in ("disable", "enable", "unlock", "delete"):
+        us.add_parser(verb).add_argument("name")
+    lim = us.add_parser(
+        "limits", help="restrict TX to bands, in Hz: 14000000-14350000,7000000-7300000"
+    )
+    lim.add_argument("name")
+    lim.add_argument("--bands", help="comma-separated low-high ranges in Hz; omit to clear")
+    user.set_defaults(func=_cmd_user)
+
+    srv = sub.add_parser("serve", help="run the HTTPS server")
+    common(srv)
+    srv.add_argument("--simulate", action="store_true", help="use simulated radios (no hardware)")
+    srv.set_defaults(func=_cmd_serve)
     return p
 
 

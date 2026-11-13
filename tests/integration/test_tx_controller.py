@@ -250,3 +250,42 @@ async def test_status_listener_sees_holder(rig):
     await rig.tx.ptt_up(ALICE)
     assert seen[0].transmitting and seen[0].holder_callsign == "N0CALL"
     assert not seen[-1].transmitting and seen[-1].last_stop_reason is StopReason.RELEASED
+
+
+# -- regressions found by the web tests (2026-11-13) --------------------------
+
+
+async def test_cancelled_release_still_unkeys(rig):
+    # A closing WebSocket cancels its handler while it is releasing PTT.
+    await rig.tx.ptt_down(ALICE)
+    rig.sim.reply_delay_s = 0.1  # a slow radio: a poll holds the bus for 100 ms
+    poll = asyncio.create_task(rig.driver.get_frequency())
+    await asyncio.sleep(0.01)
+    task = asyncio.create_task(rig.tx.ptt_up(ALICE))
+    await asyncio.sleep(0.01)  # unkey is now waiting for the bus; cancel it there
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await poll
+    rig.sim.reply_delay_s = 0.003
+    for _ in range(100):
+        if not rig.sim.reported_tx():
+            break
+        await asyncio.sleep(0.02)
+    assert not rig.sim.reported_tx()
+    assert not rig.tx.status.transmitting
+
+
+async def test_quick_rekey_is_not_killed_by_previous_unkey(rig):
+    # Release then press again within the radio's 15-65 ms TX release time:
+    # the first unkey's read-back must not send TX off over the new key.
+    await rig.tx.ptt_down(ALICE)
+    release = asyncio.create_task(rig.tx.ptt_up(ALICE))
+    await asyncio.sleep(0.005)
+    await rig.tx.ptt_down(ALICE)
+    await release
+    await asyncio.sleep(0.3)
+    assert rig.tx.status.transmitting and rig.tx.status.holder_callsign == "N0CALL"
+    assert rig.sim.state.transmitting, "the new transmission was unkeyed by the old unkey"
+    await rig.tx.ptt_up(ALICE)
+    assert not rig.sim.state.transmitting

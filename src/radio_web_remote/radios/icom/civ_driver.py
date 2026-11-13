@@ -249,6 +249,9 @@ class IcomCivDriver(RadioDriver):
         async with self._bus.acquire(Priority.URGENT):
             if self._ptt_generation != generation:
                 return False
+            # A key is newer than any unkey still confirming: that unkey's
+            # read-back loop must stop rather than send TX off again.
+            self._ptt_generation += 1
             await self._exchange(CivCommand.TX_STATE, cmd.set_tx_state(True), False)
         return True
 
@@ -256,6 +259,7 @@ class IcomCivDriver(RadioDriver):
         """Send TX off first in line; with verify, read back until the radio reports RX."""
         self._require(CivCommand.TX_STATE)
         self._ptt_generation += 1
+        generation = self._ptt_generation
         payload = cmd.set_tx_state(False)
         try:
             async with self._bus.acquire(Priority.URGENT, wait_s=UNKEY_BUS_WAIT_S):
@@ -271,6 +275,8 @@ class IcomCivDriver(RadioDriver):
         loop = asyncio.get_running_loop()
         start = last_send = loop.time()
         while loop.time() - start < UNKEY_CONFIRM_S:
+            if self._ptt_generation != generation:
+                return  # a newer key or unkey owns the PTT state now
             with contextlib.suppress(RadioTimeout):
                 if not await self.get_ptt():
                     return

@@ -23,6 +23,9 @@ dependencies = [
     "pyserial>=3.5,<4",
     "cryptography>=50.0.2,<51",
     "argon2-cffi>=25.1,<26",
+    "fastapi>=0.162.6,<0.163",
+    "uvicorn>=0.54,<0.55",
+    "websockets>=15",
 ]
 
 [project.scripts]
@@ -36,6 +39,7 @@ dev = [
     "ruff>=0.17.5",
     "mypy>=2.4",
     "types-pyyaml",
+    "httpx>=0.28.1,<0.29",
 ]
 
 [tool.hatch.build.targets.wheel]

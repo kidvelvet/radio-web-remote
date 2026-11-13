@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Radio Remote Login</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script type="module" src="/static/js/login.js"></script>
+</head>
+<body>
+  <header class="bar"><h1>Radio Remote</h1></header>
+  <main>
+    <form class="panel auth" id="login" autocomplete="on">
+      <h2>Sign in</h2>
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+      <p class="error" id="msg" role="alert"></p>
+      <button class="primary" type="submit" id="go">Sign in</button>
+      <p class="muted">First time on this device? <a href="/setup">Install the certificate</a> so the browser trusts this server and allows the microphone.</p>
+    </form>
+  </main>
+</body>
+</html>

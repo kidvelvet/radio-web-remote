@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Radio Remote Setup</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header class="bar"><h1>Radio Remote: device setup</h1><span class="spacer"></span><a class="who bar-link" href="/login">Sign in</a></header>
+  <main>
+    <section class="panel">
+      <h2>Why this step</h2>
+      <p>This server uses HTTPS with a certificate from its own local certificate authority (CA). Browsers only allow the microphone on pages they trust, so each device needs the CA installed once. You only download the public certificate; no private key leaves the server.</p>
+      <p><a class="btn primary" href="/setup/ca.crt" download>Download the CA certificate</a></p>
+      <p class="muted">If the download fails, this server may be using a certificate from your own CA or VPN provider instead, and no install is needed.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Install it</h2>
+
+      <details open>
+        <summary>iPhone and iPad (Safari)</summary>
+        <ol class="steps">
+          <li>Open this page in <b>Safari</b> and tap <b>Download the CA certificate</b>. Allow the download.</li>
+          <li>Open <b>Settings</b>. Tap <b>Profile Downloaded</b> near the top (or <b>General &gt; VPN &amp; Device Management</b>), then <b>Install</b>.</li>
+          <li>Required second step: <b>Settings &gt; General &gt; About &gt; Certificate Trust Settings</b>, and under <i>Enable full trust for root certificates</i>, turn on <b>radio-web-remote local CA</b>. Apple does not trust a downloaded certificate for HTTPS until you do this.</li>
+          <li>Return to Safari and open the address of this server again.</li>
+        </ol>
+      </details>
+
+      <details>
+        <summary>macOS</summary>
+        <ol class="steps">
+          <li>Download the certificate and double-click it. Keychain Access opens; add it to the <b>login</b> keychain.</li>
+          <li>Find <b>radio-web-remote local CA</b>, double-click it, open <b>Trust</b>, and set <i>When using this certificate</i> to <b>Always Trust</b>. Close the window and enter your password.</li>
+          <li>Safari and Chrome use this. Firefox keeps its own list: see Firefox below.</li>
+        </ol>
+      </details>
+
+      <details>
+        <summary>Windows</summary>
+        <ol class="steps">
+          <li>Download the certificate and double-click it, then <b>Install Certificate</b>.</li>
+          <li>Choose <b>Current User</b>, then <b>Place all certificates in the following store</b>, <b>Browse</b>, <b>Trusted Root Certification Authorities</b>. Finish and accept the warning.</li>
+          <li>Edge and Chrome use this. Restart the browser.</li>
+        </ol>
+      </details>
+
+      <details>
+        <summary>Android</summary>
+        <ol class="steps">
+          <li>Download the certificate.</li>
+          <li>Open <b>Settings</b> and search for <b>CA certificate</b> (often under Security &gt; Encryption &amp; credentials &gt; Install a certificate &gt; CA certificate). Choose the downloaded file.</li>
+        </ol>
+      </details>
+
+      <details>
+        <summary>Linux</summary>
+        <ol class="steps">
+          <li>Chrome and Chromium: Settings &gt; Privacy and security &gt; Security &gt; Manage certificates &gt; Authorities &gt; Import, and tick <i>Trust this certificate for identifying websites</i>.</li>
+          <li>System-wide (Debian, Ubuntu, Raspberry Pi OS): copy it to <code>/usr/local/share/ca-certificates/radio-web-remote.crt</code> and run <code>sudo update-ca-certificates</code>.</li>
+        </ol>
+      </details>
+
+      <details>
+        <summary>Firefox (any desktop system)</summary>
+        <ol class="steps">
+          <li>Settings &gt; Privacy &amp; Security &gt; Certificates &gt; View Certificates &gt; Authorities &gt; Import.</li>
+          <li>Tick <i>Trust this CA to identify websites</i>.</li>
+        </ol>
+      </details>
+    </section>
+
+    <section class="panel">
+      <h2>Then</h2>
+      <p><a href="/login">Sign in</a>. Ask your club admin for an account; accounts are created on the server, not here.</p>
+      <p class="notice">Every operator must hold a license with privileges for the band and mode in use, and is the control operator while transmitting. The rules of the country where the radio is located apply.</p>
+    </section>
+  </main>
+</body>
+</html>
