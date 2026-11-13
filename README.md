@@ -4,9 +4,10 @@ Self-hosted browser remote control for amateur radio transceivers over USB.
 A small server runs on the computer cabled to the radio; any browser on the
 LAN or VPN gets the controls, scope, receive audio and transmit.
 
-Status: **P1, pre-alpha.** IC-7300 control from a browser: frequency, mode,
-filter, DATA, AF/RF/squelch/RF power, S/Po/SWR/ALC meters and PTT with
-server-side fail-safes, behind HTTPS and login. No audio or scope yet. See
+Status: **P2, pre-alpha.** IC-7300 control from a browser: frequency, mode,
+filter, DATA, AF/RF/squelch/RF power, S/Po/SWR/ALC meters, spectrum scope and
+waterfall with tap-to-tune, and PTT with server-side fail-safes, behind HTTPS
+and login. No audio yet. See
 [docs/plan.md](docs/plan.md) for the roadmap and
 [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md) for the design.
 

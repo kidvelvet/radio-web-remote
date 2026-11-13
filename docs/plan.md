@@ -6,6 +6,7 @@ Status: proposed, awaiting approval. Architecture is in [adr/0001-architecture.m
 
 - **P0: done.** CI green on Linux (3.11, 3.12, 3.13), Windows, macOS. IC-7300 hardware checks H7300-1 to -6 pass.
 - **P1: done.** 194 unit and integration tests, 36 browser tests (Chromium, Firefox, WebKit), CI green. IC-7300 hardware: H7300-7, -8, -10, -11, -12 run on 2026-11-13 (all pass; -7 confirmed the radio stays keyed when USB is pulled). Carried forward: H7300-13 (phone network drop) to the P3 iPhone pass, and a carrier test of the Po/SWR/ALC meters.
+- **P2: done.** IC-7300 scope and waterfall: parser built from the manual and settled against real frames (H7300-14), simulator, browser UI with tap-to-tune and scope settings; 216 unit and integration tests, 42 browser tests; on-radio check H7300-15 passed.
 
 ## 0. Decisions recorded (2026-11-13)
 
