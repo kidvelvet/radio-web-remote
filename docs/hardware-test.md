@@ -12,7 +12,7 @@ Radio settings: CI-V Baud 115200, CI-V USB Port "Unlink from [REMOTE]".
 
 | # | Test | How | Result |
 |---|------|-----|--------|
-| H7300-1 | Frequency byte order | `radio-web-remote probe --port <port>`; the MHz shown must equal the front panel | 2026-11-13, macOS, firmware not recorded: probe read 14.336000 MHz USB FIL1 RX (raw reply `03 00 60 33 14 00`). Waiting on the operator to confirm the front panel showed 14.336.00. |
+| H7300-1 | Frequency byte order | `radio-web-remote probe --port <port>`; the MHz shown must equal the front panel | 2026-11-13, macOS, firmware not recorded: probe read 14.336000 MHz USB FIL1 RX (raw reply `03 00 60 33 14 00`). Operator confirmed the front panel showed 14.336.00. **Pass.** |
 | H7300-2 | Mode and filter read | change mode/filter on the front panel, probe again | Not run |
 | H7300-3 | Port open does not key | set USB SEND to DTR, then RTS; open with `probe`; radio must stay in RX | Not run |
 | H7300-4 | TX off on connect | key the radio from the front panel (into dummy load), run `probe`; radio must drop to RX | Not run |

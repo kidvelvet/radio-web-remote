@@ -10,10 +10,9 @@ so each byte holds two decimal digits (higher digit in the high nibble) and
 the byte with the 10 Hz / 1 Hz digits is sent first: little-endian by byte,
 big-endian within a byte. 14.074.000 Hz is therefore 00 40 07 14 00.
 
-TODO(verify): the manual shows this as a digit-position diagram without a
-worked example. Confirm the byte order on a real IC-7300 in P1 (read the
-frequency shown on the front panel and compare). Tracked in
-docs/hardware-test.md.
+The manual shows this as a digit-position diagram without a worked example.
+Confirmed on a real IC-7300 on 2026-11-13 (docs/hardware-test.md, H7300-1):
+the radio sent 00 60 33 14 00 while its front panel showed 14.336.00.
 """
 
 from __future__ import annotations

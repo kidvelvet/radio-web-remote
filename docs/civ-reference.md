@@ -38,7 +38,7 @@ third-party copy) or confirmed on hardware. Until then the row is a
 | Set operating mode | `06` + mode [+ filter] | 7300-FM p. 19-3, 19-8 | filter omitted means the mode's default filter |
 | TX/RX status, read | `1C 00` | 7300-FM p. 19-7 | reply `1C 00 00` (RX) or `1C 00 01` (TX) |
 | TX/RX status, set | `1C 00 00` RX, `1C 00 01` TX | 7300-FM p. 19-7 | 00/01 sit in the Data column |
-| Frequency data | 5 bytes, BCD; byte 1 = 10 Hz/1 Hz, byte 2 = 1 kHz/100 Hz, byte 3 = 100 kHz/10 kHz, byte 4 = 10 MHz/1 MHz, byte 5 = 1000 MHz/100 MHz (fixed 0) | 7300-FM p. 19-8 | Higher digit in the high nibble, from the digit-label order. No worked example in the manual. TODO(verify) on hardware. |
+| Frequency data | 5 bytes, BCD; byte 1 = 10 Hz/1 Hz, byte 2 = 1 kHz/100 Hz, byte 3 = 100 kHz/10 kHz, byte 4 = 10 MHz/1 MHz, byte 5 = 1000 MHz/100 MHz (fixed 0) | 7300-FM p. 19-8 | Higher digit in the high nibble, from the digit-label order. No worked example in the manual. Confirmed on IC-7300 hardware 2026-11-13 (H7300-1): reply `00 60 33 14 00` = 14.336.000 Hz, matching the front panel. |
 | Mode codes | LSB 00, USB 01, AM 02, CW 03, RTTY 04, FM 05, CW-R 07, RTTY-R 08 | 7300-FM p. 19-8 | 06 not listed |
 | Filter codes | FIL1 01, FIL2 02, FIL3 03 | 7300-FM pp. 19-8, 19-9 | |
 | CI-V Transceive setting | `1A 05 0071`, 00 OFF / 01 ON | 7300-FM p. 19-5 | not used yet |
