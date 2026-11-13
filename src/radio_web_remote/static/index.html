@@ -3,11 +3,87 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f2a4f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Radio Remote</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/radio.css">
+  <script type="module" src="/static/js/app.js"></script>
 </head>
 <body>
-  <header class="bar"><h1>Radio Remote</h1></header>
-  <main><p>Loading...</p></main>
+  <header class="bar">
+    <h1 id="title">Radio Remote</h1>
+    <span class="pill" id="link" data-state="connecting">Connecting</span>
+    <span class="spacer"></span>
+    <span class="who" id="who"></span>
+    <button type="button" id="logout" class="small">Log out</button>
+  </header>
+
+  <div class="txbar" id="txbar" data-state="rx" role="status" aria-live="assertive">
+    <span id="txtext">Receive</span>
+  </div>
+
+  <main class="grid">
+    <section class="panel span2" aria-label="Frequency">
+      <div class="freq" id="freq" tabindex="0" role="slider" aria-label="Frequency, drag left or right to tune"
+           aria-valuetext="">
+        <span id="freqtext">--.---.---</span><span class="unit">MHz</span>
+      </div>
+      <div class="row tune">
+        <button type="button" id="down" aria-label="Tune down one step">&#8722;</button>
+        <select id="step" aria-label="Tuning step">
+          <option value="10">10 Hz</option>
+          <option value="100" selected>100 Hz</option>
+          <option value="1000">1 kHz</option>
+          <option value="5000">5 kHz</option>
+          <option value="10000">10 kHz</option>
+        </select>
+        <button type="button" id="up" aria-label="Tune up one step">+</button>
+        <form id="direct" class="row grow">
+          <input id="entry" inputmode="decimal" autocomplete="off" placeholder="14.074" aria-label="Frequency in MHz">
+          <button type="submit">Go</button>
+        </form>
+      </div>
+      <div class="row bands" id="bands" aria-label="Bands"></div>
+    </section>
+
+    <section class="panel" aria-label="Mode and filter">
+      <h2>Mode</h2>
+      <div class="row wrap" id="modes"></div>
+      <div class="row" id="filters" data-feature="filter">
+        <button type="button" data-filter="1">FIL1</button>
+        <button type="button" data-filter="2">FIL2</button>
+        <button type="button" data-filter="3">FIL3</button>
+        <button type="button" id="data" data-feature="data_mode" aria-pressed="false">DATA</button>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Meters">
+      <h2>Meters</h2>
+      <div class="meter" data-feature="meter_s"><label for="m-s">S</label><meter id="m-s" min="0" max="241" low="0" high="120" optimum="0"></meter><span id="m-s-t">-</span></div>
+      <div class="meter" data-feature="meter_po"><label for="m-po">Po</label><meter id="m-po" min="0" max="255"></meter><span id="m-po-t">-</span></div>
+      <div class="meter" data-feature="meter_swr"><label for="m-swr">SWR</label><meter id="m-swr" min="0" max="255" low="48" high="80" optimum="0"></meter><span id="m-swr-t">-</span></div>
+      <div class="meter" data-feature="meter_alc"><label for="m-alc">ALC</label><meter id="m-alc" min="0" max="255" high="120" optimum="0"></meter><span id="m-alc-t">-</span></div>
+      <p class="muted small">Values between the manual's printed calibration points are approximate.</p>
+    </section>
+
+    <section class="panel" aria-label="Levels">
+      <h2>Levels</h2>
+      <div class="level" data-feature="level_af"><label for="l-af">AF</label><input type="range" id="l-af" min="0" max="255" data-level="af"><span id="l-af-t"></span></div>
+      <div class="level" data-feature="level_rf_gain"><label for="l-rf_gain">RF gain</label><input type="range" id="l-rf_gain" min="0" max="255" data-level="rf_gain"><span id="l-rf_gain-t"></span></div>
+      <div class="level" data-feature="level_squelch"><label for="l-squelch">Squelch</label><input type="range" id="l-squelch" min="0" max="255" data-level="squelch"><span id="l-squelch-t"></span></div>
+      <div class="level" data-feature="level_rf_power"><label for="l-rf_power">RF power</label><input type="range" id="l-rf_power" min="0" max="255" data-level="rf_power"><span id="l-rf_power-t"></span></div>
+      <p class="muted small">RF power is the control position, not watts.</p>
+    </section>
+
+    <section class="panel ptt-panel" aria-label="Transmit">
+      <button type="button" class="ptt" id="ptt" aria-pressed="false" disabled>PTT</button>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="toggle"> Tap to toggle</label>
+        <span class="muted small" id="ptthint">Hold to talk. Spacebar works on a keyboard.</span>
+      </div>
+      <p class="error" id="msg" role="alert"></p>
+    </section>
+  </main>
 </body>
 </html>

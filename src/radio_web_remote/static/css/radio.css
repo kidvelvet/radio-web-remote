@@ -1,0 +1,67 @@
+/* Control page. Mobile first; two columns from 760px. */
+
+.grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+.grid .panel { margin: 0; }
+@media (min-width: 760px) {
+  .grid { grid-template-columns: 1fr 1fr; }
+  .span2 { grid-column: span 2; }
+}
+
+button.small { min-height: 36px; padding: 0 10px; font-size: .9rem; background: transparent; color: #fff; border-color: rgba(255,255,255,.4); }
+.small { font-size: .85rem; }
+.wrap { flex-wrap: wrap; }
+.hidden { display: none !important; }
+
+.pill { font-size: .8rem; padding: 2px 10px; border-radius: 999px; background: rgba(255,255,255,.15); }
+.pill[data-state="up"] { background: var(--ok); color: #fff; }
+.pill[data-state="down"] { background: var(--warn); color: #000; }
+
+/* TX status bar */
+.txbar { padding: 8px 16px; text-align: center; font-weight: 700; letter-spacing: .02em; background: var(--panel); border-bottom: 1px solid var(--line); }
+.txbar[data-state="tx"] { background: var(--tx); color: var(--tx-ink); }
+.txbar[data-state="pending"] { background: var(--warn); color: #000; }
+.txbar[data-state="held"] { background: var(--navy); color: #fff; }
+
+/* Frequency display: the drag-to-tune surface */
+.freq {
+  font: 700 clamp(2.2rem, 11vw, 4rem)/1.1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  padding: 10px 0 14px;
+  cursor: ew-resize;
+  touch-action: none;           /* we handle horizontal drags ourselves */
+  -webkit-user-select: none;
+  user-select: none;
+  border-radius: var(--radius);
+}
+.freq:focus-visible { outline: 3px solid var(--accent); }
+.freq.dragging { background: var(--bg); }
+.freq .unit { font-size: .35em; margin-left: .4em; color: var(--muted); }
+.tune select { min-height: var(--tap); border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; padding: 0 8px; }
+.tune #down, .tune #up { font-size: 1.5rem; width: 64px; }
+.bands { margin-top: 10px; flex-wrap: wrap; }
+.bands button { min-width: 64px; }
+
+/* Meters and levels */
+.meter, .level { display: grid; grid-template-columns: 4.5em 1fr 4.5em; align-items: center; gap: 10px; margin: 8px 0; }
+.meter label, .level label { margin: 0; color: var(--ink); font-size: .95rem; }
+.meter meter { width: 100%; height: 18px; }
+.meter span, .level span { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.level input[type=range] { width: 100%; min-height: var(--tap); accent-color: var(--accent); }
+
+/* PTT */
+.ptt-panel { display: flex; flex-direction: column; gap: 12px; }
+.ptt {
+  min-height: 120px;
+  font-size: 1.6rem;
+  font-weight: 800;
+  border-radius: 18px;
+  border: 3px solid var(--tx);
+  color: var(--tx);
+  background: var(--panel);
+  touch-action: none;
+}
+.ptt[aria-pressed="true"] { background: var(--tx); color: var(--tx-ink); }
+.ptt:disabled { border-color: var(--line); color: var(--muted); }
+label.check { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ink); min-height: var(--tap); }
+label.check input { width: 22px; height: 22px; }
