@@ -12,6 +12,8 @@ Client -> server (JSON):
   {"type": "set_level", "level": "af" | "rf_gain" | "squelch" | "rf_power", "value": 0..255}
   {"type": "set_data_mode", "on": true | false}
   {"type": "scope", "on": true | false}   subscribe to scope lines (binary frames)
+  {"type": "audio", "mode": "remote" | "host" | "monitor" | null}
+  binary 0x03 frames: transmit audio (audio/pcm.py), used only from the TX holder
   {"type": "set_scope", "setting": "mode"|"span"|"edge"|"hold"|"ref"|"speed", "value": ...}
 
 Server -> client (JSON):
@@ -37,6 +39,8 @@ from typing import Any
 
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
+from radio_web_remote.audio import pcm
+from radio_web_remote.audio.router import AudioMode
 from radio_web_remote.config import PttConfig
 from radio_web_remote.radios.base import Level, Mode, ModeSetting, RadioError
 from radio_web_remote.security.users import Session
@@ -65,10 +69,17 @@ class _Conn:
         self.scope_on = False
         # Newest few scope lines only: a slow link drops waterfall rows, never control.
         self.scope_lines: collections.deque[bytes] = collections.deque(maxlen=3)
+        self.audio_mode: AudioMode | None = None
+        # About 0.5 s of receive audio; beyond that a slow link drops audio, not control.
+        self.audio_frames: collections.deque[bytes] = collections.deque(maxlen=25)
         self.wake = asyncio.Event()
 
     def push_state(self, state: dict[str, Any]) -> None:
         self.pending_state = state
+        self.wake.set()
+
+    def push_audio(self, frame: bytes) -> None:
+        self.audio_frames.append(frame)
         self.wake.set()
 
     def push_scope(self, frame: bytes) -> None:
@@ -89,6 +100,7 @@ class Hub:
         self._ids = itertools.count(1)
         self._listeners: dict[str, Callable[[RadioState], None]] = {}
         self._scope_listeners: dict[str, Callable[[Any], None]] = {}
+        self._audio_listeners: dict[str, Callable[[bytes], None]] = {}
 
     def start(self) -> None:
         for rid, st in self.stations.items():
@@ -114,11 +126,33 @@ class Hub:
             self._scope_listeners[rid] = on_scope
             st.add_scope_listener(on_scope)
 
+            def on_rx_audio(frame_pcm: bytes, rid: str = rid) -> None:
+                st = self.stations[rid]
+                frame: bytes | None = None
+                level_tick = st.audio.rx_seq % 10 == 0  # about 5 Hz
+                holder = st.tx.status.holder_session if st.tx.status.transmitting else None
+                for c in self._conns.values():
+                    if c.radio_id != rid or c.audio_mode is None:
+                        continue
+                    if c.audio_mode is not AudioMode.HOST:
+                        frame = frame or pcm.encode_frame(
+                            pcm.TYPE_RX_AUDIO, st.audio.rx_seq, frame_pcm
+                        )
+                        c.push_audio(frame)
+                    if level_tick and holder == c.op.session_id:
+                        c.push({"type": "tx_level", "peak_dbfs": st.audio.tx_peak_dbfs})
+
+            self._audio_listeners[rid] = on_rx_audio
+            st.audio.add_rx_listener(on_rx_audio)
+
     async def close(self) -> None:
         for rid, cb in self._listeners.items():
             self.stations[rid].remove_listener(cb)
         for rid, scb in self._scope_listeners.items():
             self.stations[rid].remove_scope_listener(scb)
+        for rid, acb in self._audio_listeners.items():
+            self.stations[rid].audio.remove_rx_listener(acb)
+        self._audio_listeners.clear()
         self._listeners.clear()
         self._scope_listeners.clear()
         for c in list(self._conns.values()):
@@ -167,6 +201,7 @@ class Hub:
             log.exception("control connection %s failed", conn_id)
         finally:
             self._conns.pop(conn_id, None)
+            station.audio.remove(conn_id)
             if conn.scope_on:
                 await asyncio.shield(self._update_scope_demand(radio_id))
             # Server-side fail-safe: a closed connection never keeps the transmitter.
@@ -186,6 +221,10 @@ class Hub:
             state, conn.pending_state = conn.pending_state, None
             lines = list(conn.scope_lines)
             conn.scope_lines.clear()
+            audio = list(conn.audio_frames)
+            conn.audio_frames.clear()
+            for af in audio:
+                await conn.ws.send_bytes(af)
             for m in msgs:
                 await conn.ws.send_text(json.dumps(m))
             if state is not None:
@@ -210,10 +249,17 @@ class Hub:
     async def _receive(self, conn: _Conn, station: RadioStation) -> None:
         while True:
             try:
-                text = await asyncio.wait_for(conn.ws.receive_text(), IDLE_CLOSE_S)
+                message = await asyncio.wait_for(conn.ws.receive(), IDLE_CLOSE_S)
             except TimeoutError:
                 await conn.ws.close(code=4000)
                 return
+            if message.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect(message.get("code", 1000))
+            data = message.get("bytes")
+            if data is not None:
+                self._handle_binary(conn, station, data)
+                continue
+            text = message.get("text") or ""
             if len(text) > MAX_MESSAGE:
                 conn.push({"type": "error", "code": "too_big", "message": "message too large"})
                 continue
@@ -225,6 +271,15 @@ class Hub:
                 conn.push({"type": "error", "code": "bad_json", "message": "invalid JSON"})
                 continue
             await self._handle(conn, station, msg)
+
+    def _handle_binary(self, conn: _Conn, station: RadioStation, data: bytes) -> None:
+        """Transmit audio from the browser. Silently ignored unless this tab holds TX."""
+        try:
+            _seq, _rate, frame_pcm = pcm.decode_frame(data, pcm.TYPE_TX_AUDIO)
+        except pcm.AudioFrameError as exc:
+            conn.push({"type": "error", "code": "bad_audio", "message": str(exc)})
+            return
+        station.audio.tx_from_browser(conn.op.session_id, frame_pcm)
 
     async def _handle(self, conn: _Conn, station: RadioStation, msg: dict[str, Any]) -> None:
         kind = msg.get("type")
@@ -238,6 +293,16 @@ class Hub:
                     await tx.ptt_down(op)
                 else:
                     await tx.ptt_up(op)
+            elif kind == "audio":
+                mode = msg.get("mode")
+                if mode is None:
+                    conn.audio_mode = None
+                    station.audio.remove(op.session_id)
+                    conn.audio_frames.clear()
+                else:
+                    audio_mode = AudioMode(str(mode))
+                    station.audio.set_mode(op.session_id, audio_mode)
+                    conn.audio_mode = audio_mode
             elif kind == "scope":
                 on = msg.get("on")
                 if not isinstance(on, bool):

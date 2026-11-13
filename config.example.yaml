@@ -43,6 +43,12 @@ ptt:
   heartbeat_timeout_s: 2.0         # unkey if no heartbeat for this long
   tx_timeout_s: 180                # longest single transmission; max 180, can only be lowered
 
+# This computer's microphone and speakers, for the "host" audio routing mode
+# (the server bridges them to the radio; browsers only control). null = off.
+host_audio:
+  input_device: null
+  output_device: null
+
 # One entry per radio cabled to this host. Empty by default.
 radios: []
 # Example:
@@ -58,3 +64,7 @@ radios: []
 #     controller_address: "E0"
 #     auto_detect_address: false
 #     ptt_method: civ              # civ, dtr or rts
+#     audio:
+#       enabled: true
+#       input_device: auto         # the radio's "USB Audio CODEC"; or a name or index
+#       output_device: auto        # see: radio-web-remote audio devices

@@ -218,6 +218,15 @@ def _cmd_user(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audio_devices(_: argparse.Namespace) -> int:
+    from radio_web_remote.audio.devices import CODEC_NAME, list_devices
+
+    for d in list_devices():
+        tag = "  <- radio codec?" if d.name == CODEC_NAME else ""
+        print(f"{d.index:3}  in {d.inputs}  out {d.outputs}  {d.host_api:12}  {d.name}{tag}")
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import logging
 
@@ -299,6 +308,12 @@ def build_parser() -> argparse.ArgumentParser:
     lim.add_argument("name")
     lim.add_argument("--bands", help="comma-separated low-high ranges in Hz; omit to clear")
     user.set_defaults(func=_cmd_user)
+
+    aud = sub.add_parser("audio", help="audio tools")
+    aud_sub = aud.add_subparsers(dest="audio_command", required=True)
+    aud_sub.add_parser("devices", help="list audio devices and their indexes").set_defaults(
+        func=_cmd_audio_devices
+    )
 
     srv = sub.add_parser("serve", help="run the HTTPS server")
     common(srv)

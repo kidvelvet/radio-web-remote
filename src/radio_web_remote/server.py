@@ -10,6 +10,8 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 
+from radio_web_remote.audio.backend import AudioBackend, SimAudioBackend, SoundDeviceBackend
+from radio_web_remote.audio.devices import AudioDeviceError, list_devices, resolve
 from radio_web_remote.config import Config, RadioConfig
 from radio_web_remote.radios.icom import MODELS
 from radio_web_remote.security.audit import AuditLog
@@ -45,6 +47,33 @@ def _sim_factory(sim: IcomSimulator) -> ByteTransport:
     return loopback_transport(sim)
 
 
+def _real_audio(
+    cfg: Config, rc: RadioConfig
+) -> tuple[AudioBackend | None, AudioBackend | None, str | None]:
+    """Resolve the radio codec and optional host devices. Returns (radio, host, error)."""
+    if not rc.audio.enabled:
+        return None, None, "audio disabled in config"
+    try:
+        devices = list_devices()
+        radio = SoundDeviceBackend(
+            resolve(rc.audio.input_device, "input", devices),
+            resolve(rc.audio.output_device, "output", devices),
+            f"{rc.id} codec",
+        )
+        host = None
+        h = cfg.host_audio
+        if h.input_device is not None or h.output_device is not None:
+            host = SoundDeviceBackend(
+                resolve(h.input_device, "input", devices),
+                resolve(h.output_device, "output", devices),
+                "host",
+            )
+        return radio, host, None
+    except (AudioDeviceError, OSError) as exc:
+        log.warning("radio %s: audio unavailable: %s", rc.id, exc)
+        return None, None, str(exc)
+
+
 def build_runtime(cfg: Config, data_dir: Path, simulate: bool = False) -> Runtime:
     users = UserStore(users_db(data_dir))
     if users.count_admins() == 0:
@@ -67,7 +96,23 @@ def build_runtime(cfg: Config, data_dir: Path, simulate: bool = False) -> Runtim
             def factory(sim: IcomSimulator = sim) -> ByteTransport:
                 return _sim_factory(sim)
 
-        stations[rc.id] = RadioStation(rc, cfg.ptt, transport_factory=factory, audit=audit)
+        if simulate:
+            radio_audio: AudioBackend | None = SimAudioBackend(monitor=True)
+            host_audio: AudioBackend | None = SimAudioBackend(monitor=False)
+            audio_error = None
+        else:
+            radio_audio, host_audio, audio_error = _real_audio(cfg, rc)
+        station = RadioStation(
+            rc,
+            cfg.ptt,
+            transport_factory=factory,
+            audit=audit,
+            radio_audio=radio_audio,
+            host_audio=host_audio,
+        )
+        if audio_error:
+            station.audio.error = audio_error
+        stations[rc.id] = station
     app = create_app(cfg, users, stations, audit=audit, ca_cert_file=tls.ca_cert_file)
     return Runtime(app, tls, changed, stations, users, audit)
 

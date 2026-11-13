@@ -8,6 +8,8 @@ from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from radio_web_remote.audio import pcm
+from radio_web_remote.audio.backend import SimAudioBackend
 from radio_web_remote.config import Config, PttConfig, RadioConfig
 from radio_web_remote.radios.icom import IC7300
 from radio_web_remote.security import users as users_mod
@@ -36,6 +38,7 @@ def env(tmp_path):
     ptt = PttConfig(heartbeat_interval_s=0.1, heartbeat_timeout_s=0.5)
     cfg = Config.model_validate({"ptt": ptt.model_dump()})
     audit = AuditLog(tmp_path / "audit.log")
+    radio_audio, host_audio = SimAudioBackend(monitor=False), SimAudioBackend(monitor=False)
     station = RadioStation(
         RadioConfig(id="ic7300"),
         ptt,
@@ -43,6 +46,8 @@ def env(tmp_path):
         audit=audit,
         poll_interval_s=0.1,
         tx_watchdog_s=0.02,
+        radio_audio=radio_audio,
+        host_audio=host_audio,
     )
     ca = tmp_path / "ca.crt"
     ca.write_text("-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n")
@@ -58,6 +63,8 @@ def env(tmp_path):
             "station": station,
             "store": store,
             "tmp": tmp_path,
+            "radio_audio": radio_audio,
+            "host_audio": host_audio,
         }
     audit.close()
 
@@ -98,10 +105,21 @@ def wsc(client, path="/ws", origin=BASE, cookies=None):
 
 
 def recv_until(ws, pred, limit=200):
-    for _ in range(limit):
-        msg = ws.receive_json()
+    """Next JSON message matching pred. Binary frames (audio, scope) are skipped
+    and do not count toward the limit, except as a guard against looping forever."""
+    seen = 0
+    for _ in range(limit * 50):
+        m = ws.receive()
+        if m.get("type") == "websocket.close":
+            raise WebSocketDisconnect(m.get("code", 1000))
+        if m.get("text") is None:
+            continue
+        msg = json.loads(m["text"])
         if pred(msg):
             return msg
+        seen += 1
+        if seen >= limit:
+            break
     raise AssertionError("expected message never arrived")
 
 
@@ -478,3 +496,132 @@ def test_ws_scope_subscription_and_settings(env):
             "bad_request",
             "radio",
         )
+
+
+# -- audio routing (requirement 5) --------------------------------------------
+
+
+def recv_binary(ws, kind, limit=400):
+    for _ in range(limit):
+        m = ws.receive()
+        if m.get("bytes") and m["bytes"][0] == kind:
+            return m["bytes"]
+    raise AssertionError("no binary frame of that type arrived")
+
+
+def wait(cond, timeout=3.0):
+    end = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < end, "condition not met"
+        time.sleep(0.02)
+
+
+MIC = pcm.tone(1000, 20, amplitude=0.5)
+
+
+def mic_frame(seq=1):
+    return pcm.encode_frame(pcm.TYPE_TX_AUDIO, seq, MIC)
+
+
+def test_remote_mode_rx_audio_and_tx_only_while_holding(env):
+    c = env["client"]
+    login(c)
+    radio = env["radio_audio"]
+    with wsc(c) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "audio", "mode": "remote"})
+        _seq, rate, body = pcm.decode_frame(recv_binary(ws, pcm.TYPE_RX_AUDIO), pcm.TYPE_RX_AUDIO)
+        assert rate == 16_000 and len(body) == 640
+        for i in range(5):  # not holding TX: ignored
+            ws.send_bytes(mic_frame(i))
+        time.sleep(0.2)
+        assert radio.tx_frames == []
+        ws.send_json({"type": "ptt", "down": True})
+        recv_until(ws, keyed)
+        for i in range(10):
+            ws.send_bytes(mic_frame(i))
+        wait(lambda: len(radio.tx_frames) >= 3)
+        assert radio.tx_frames[0] == MIC
+        level = recv_until(ws, lambda m: m.get("type") == "tx_level")
+        assert level["peak_dbfs"] == pytest.approx(-6.0, abs=0.3)
+        ws.send_json({"type": "ptt", "down": False})
+        recv_until(ws, lambda m: tx_state(m) and not m["state"]["tx"]["transmitting"])
+        n = len(radio.tx_frames)
+        for i in range(10):
+            ws.send_bytes(mic_frame(i))
+        time.sleep(0.3)
+        assert (
+            len(radio.tx_frames) <= n + 1
+        )  # nothing new after TX ended (one frame may be in flight)
+
+
+def test_monitor_mode_never_transmits_audio(env):
+    c = env["client"]
+    login(c)
+    with wsc(c) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "audio", "mode": "monitor"})
+        recv_binary(ws, pcm.TYPE_RX_AUDIO)
+        ws.send_json({"type": "ptt", "down": True})
+        recv_until(ws, keyed)
+        for i in range(10):
+            ws.send_bytes(mic_frame(i))
+        time.sleep(0.3)
+        ws.send_json({"type": "ptt", "down": False})
+    assert env["radio_audio"].tx_frames == []
+
+
+def test_host_mode_bridges_host_devices(env):
+    c = env["client"]
+    login(c)
+    radio, host = env["radio_audio"], env["host_audio"]
+    with wsc(c) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "audio", "mode": "host"})
+        wait(lambda: len(host.tx_frames) >= 3)  # radio receive audio plays on host speakers
+        (conn,) = env["app"].state.ctx.hub._conns.values()
+        pushed = []
+        conn.push_audio = pushed.append  # count receive audio handed to this browser
+        ws.send_json({"type": "ptt", "down": True})
+        recv_until(ws, keyed)
+        wait(lambda: len(radio.tx_frames) >= 3)  # host mic goes to the radio while keyed
+        ws.send_bytes(mic_frame())  # browser mic is not used in host mode
+        ws.send_json({"type": "ptt", "down": False})
+        recv_until(ws, lambda m: tx_state(m) and not m["state"]["tx"]["transmitting"])
+    assert pushed == []  # no receive audio to a host-mode browser
+    assert MIC not in radio.tx_frames
+
+
+def test_listener_hears_but_cannot_send_audio(env):
+    c = env["client"]
+    login(c, "lee")
+    with wsc(c) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "audio", "mode": "remote"})
+        recv_binary(ws, pcm.TYPE_RX_AUDIO)
+        for i in range(10):
+            ws.send_bytes(mic_frame(i))
+        time.sleep(0.2)
+    assert env["radio_audio"].tx_frames == []
+
+
+def test_bad_audio_frame_and_bad_mode(env):
+    c = env["client"]
+    login(c)
+    with wsc(c) as ws:
+        ws.receive_json()
+        ws.send_bytes(b"\x03\x01garbage")
+        assert recv_until(ws, lambda m: m.get("type") == "error")["code"] == "bad_audio"
+        ws.send_json({"type": "audio", "mode": "loudspeaker"})
+        assert recv_until(ws, lambda m: m.get("type") == "error")["code"] == "bad_request"
+
+
+def test_state_reports_audio(env):
+    c = env["client"]
+    login(c)
+    with wsc(c) as ws:
+        ws.receive_json()
+        st = recv_until(
+            ws, lambda m: m.get("type") == "state" and m["state"]["audio"].get("available")
+        )
+        assert st["state"]["audio"]["host_mode"] is True

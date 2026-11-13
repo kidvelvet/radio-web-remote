@@ -116,6 +116,33 @@ class SerialMatch(_Strict):
     port: str | None = None
 
 
+DeviceRef = Annotated[str | int, Field()] | None
+
+
+class RadioAudioConfig(_Strict):
+    """The radio's USB audio codec.
+
+    "auto" picks the only device named "USB Audio CODEC" (how the IC-7300
+    codec appears on macOS and, per the brief, Windows). With more than one
+    radio on a host, name the device (a name substring) or give its index
+    from `radio-web-remote audio devices`.
+    """
+
+    enabled: bool = True
+    input_device: DeviceRef = "auto"  # radio -> computer (receive audio)
+    output_device: DeviceRef = "auto"  # computer -> radio (transmit audio)
+
+
+class HostAudioConfig(_Strict):
+    """This computer's own microphone and speakers, for the "host" routing mode.
+
+    Leave both null to disable host mode.
+    """
+
+    input_device: DeviceRef = None
+    output_device: DeviceRef = None
+
+
 class RadioConfig(_Strict):
     id: str
     driver: str = "icom.ic7300"
@@ -128,6 +155,7 @@ class RadioConfig(_Strict):
     controller_address: Annotated[int, Field(ge=0x01, le=0xFB)] = 0xE0
     auto_detect_address: bool = False
     ptt_method: Literal["civ", "dtr", "rts"] = "civ"
+    audio: RadioAudioConfig = Field(default_factory=RadioAudioConfig)
 
     @field_validator("id")
     @classmethod
@@ -150,6 +178,7 @@ class Config(_Strict):
     site: SiteConfig = Field(default_factory=SiteConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     ptt: PttConfig = Field(default_factory=PttConfig)
+    host_audio: HostAudioConfig = Field(default_factory=HostAudioConfig)
     radios: list[RadioConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")

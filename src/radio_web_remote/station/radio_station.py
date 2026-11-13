@@ -19,6 +19,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
+from radio_web_remote.audio.backend import AudioBackend
+from radio_web_remote.audio.router import AudioRouter
 from radio_web_remote.config import PttConfig, RadioConfig
 from radio_web_remote.devices.serial_ports import resolve_port
 from radio_web_remote.radios import registry
@@ -74,6 +76,7 @@ class RadioState:
     levels: dict[str, int] = field(default_factory=dict)  # "af" -> 0..255
     meters: dict[str, dict[str, Any]] = field(default_factory=dict)
     scope: dict[str, Any] = field(default_factory=dict)  # mode, span, edge, hold, ref, speed
+    audio: dict[str, Any] = field(default_factory=dict)  # available, error, host_mode
     tx: TxStatus = field(default_factory=lambda: TxStatus(False))
 
     def to_json(self) -> dict[str, Any]:
@@ -119,6 +122,8 @@ class RadioStation:
         response_timeout_s: float = 0.5,
         tx_watchdog_s: float = 0.1,
         meter_interval_s: float = 0.25,
+        radio_audio: AudioBackend | None = None,
+        host_audio: AudioBackend | None = None,
     ) -> None:
         self.cfg = cfg
         self._factory = transport_factory or self._serial_factory
@@ -149,19 +154,50 @@ class RadioStation:
             audit=audit,
             watchdog_interval_s=tx_watchdog_s,
         )
-        self.tx.add_listener(lambda s: self._update(tx=s))
+        self.tx.add_listener(self._on_tx_status)
+        self.audio = AudioRouter(
+            radio_audio,
+            host_audio,
+            holder=lambda: self.tx.status.holder_session if self.tx.status.transmitting else None,
+        )
+        self._audio_watch: asyncio.Task[None] | None = None
 
     # -- lifecycle -------------------------------------------------------
     def _serial_factory(self) -> ByteTransport:
         return SerialTransport(resolve_port(self.cfg.match), self.cfg.baud)
 
+    def _on_tx_status(self, status: TxStatus) -> None:
+        if not status.transmitting:
+            self.audio.tx_ended()
+        self._update(tx=status)
+
+    async def _watch_audio(self) -> None:
+        while True:
+            self._update(
+                audio={
+                    "available": self.audio.running,
+                    "error": self.audio.error,
+                    "host_mode": self.audio.host_available,
+                }
+            )
+            await asyncio.sleep(1.0)
+
     async def start(self) -> None:
         await self.tx.start()
+        await self.audio.start()
+        if self._audio_watch is None:
+            self._audio_watch = asyncio.create_task(self._watch_audio())
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name=f"station-{self.cfg.id}")
 
     async def close(self) -> None:
         await self.tx.close()  # unkeys first
+        if self._audio_watch is not None:
+            self._audio_watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._audio_watch
+            self._audio_watch = None
+        await self.audio.close()
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -26,6 +26,7 @@ dependencies = [
     "fastapi>=0.162.6,<0.163",
     "uvicorn>=0.54,<0.55",
     "websockets>=15",
+    "sounddevice>=0.5.6,<0.6",
 ]
 
 [project.scripts]
@@ -75,5 +76,5 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["serial", "serial.*"]
+module = ["serial", "serial.*", "sounddevice"]
 ignore_missing_imports = true

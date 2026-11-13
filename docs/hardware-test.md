@@ -10,6 +10,8 @@ for, at low power.
 
 Radio settings: CI-V Baud 115200, CI-V USB Port "Unlink from [REMOTE]".
 
+Maintainer's radio: firmware **1.42** (reported by the operator 2026-11-13). Results marked "firmware not recorded" below are from this radio and firmware.
+
 | # | Test | How | Result |
 |---|------|-----|--------|
 | H7300-1 | Frequency byte order | `radio-web-remote probe --port <port>`; the MHz shown must equal the front panel | 2026-11-13, macOS, firmware not recorded: probe read 14.336000 MHz USB FIL1 RX (raw reply `03 00 60 33 14 00`). Operator confirmed the front panel showed 14.336.00. **Pass.** |
