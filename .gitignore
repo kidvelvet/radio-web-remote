@@ -1,0 +1,31 @@
+# Tooling
+.tools/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Secrets and runtime state: never commit
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+certs/
+data/
+*.db
+*.sqlite3
+logs/
+*.log
+config.yaml
+
+# OS
+.DS_Store
+Thumbs.db
