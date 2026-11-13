@@ -66,6 +66,8 @@ export class BrowserAudio {
       this.gain = new GainNode(ctx, { gain: volume });
       this.player.connect(this.gain).connect(ctx.destination);
     }
+    // tools/bench_audio.py measures round-trip latency at this point.
+    if (new URLSearchParams(location.search).has("bench")) window.rwrBench = { ctx, out: this.gain };
     if (stream) {
       this.mic = stream;
       const src = new MediaStreamAudioSourceNode(ctx, { mediaStream: stream });

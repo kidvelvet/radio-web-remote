@@ -29,6 +29,8 @@ Status: P1. Covers what exists now; audio (P3) and packaging (P5) will add to it
 | TX safety | All fail-safes on the server (docs/adr/0001-architecture.md D6). |
 | Audit | JSON Lines log, rotated at 5 MB x 10: logins, failures, lockouts, logouts, TX start/stop with user, callsign, radio, frequency, duration and reason. Secret fields are dropped. |
 | Keys | CA and server keys written with mode 0600 in the data folder, never in the repo. |
+| CA scope | The local CA carries critical X.509 Name Constraints: it can vouch only for local names (.local, .lan, .home.arpa, .internal, localhost, this host and configured hostnames) and private or configured VPN addresses. A stolen CA key cannot impersonate public websites to devices that trust it. |
+| Audio | Rides the same authenticated, origin-checked socket (ADR 0002). Transmit audio is accepted only from the TX holder. |
 | Admin | The first admin is created from the command line only (`radio-web-remote init`). |
 
 ## Before exposing to the internet

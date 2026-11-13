@@ -16,7 +16,9 @@ RED = (229, 57, 53)
 
 def png(width: int, height: int, rows: list[bytes]) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        return (
+            struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        )
 
     raw = b"".join(b"\x00" + r for r in rows)
     return (

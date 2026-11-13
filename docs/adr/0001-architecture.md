@@ -92,7 +92,7 @@ PCM over the existing WSS, played and captured with an AudioWorklet:
 - Works in iOS Safari (AudioWorklet and getUserMedia in a secure context).
 - Costs: TCP head-of-line blocking on lossy links, and we write a small jitter buffer. Bandwidth at 16 kHz, 16-bit mono is 256 kbit/s each way; SSB voice needs under 3 kHz, so 12 kHz or 8 kHz with a codec is possible later.
 
-Plan: implement an `AudioTransport` interface with a WSS PCM implementation first, then a WebRTC implementation in the P3 spike. Measure mouth-to-ear latency, glitch rate at 0, 1 and 3 percent simulated loss, CPU on a Pi 4, and behavior on iPhone Safari tab and home-screen app. Record results in `docs/adr/0002-audio-transport.md` and pick the default from data. If WebRTC wins, WSS PCM stays as the fallback for networks where UDP fails.
+Outcome (2026-11-13): decided in [ADR 0002](0002-audio-transport.md): WSS PCM only for v1. Original plan: implement an `AudioTransport` interface with a WSS PCM implementation first, then a WebRTC implementation in the P3 spike. Measure mouth-to-ear latency, glitch rate at 0, 1 and 3 percent simulated loss, CPU on a Pi 4, and behavior on iPhone Safari tab and home-screen app. Record results in `docs/adr/0002-audio-transport.md` and pick the default from data. If WebRTC wins, WSS PCM stays as the fallback for networks where UDP fails.
 
 Host side uses `sounddevice` (PortAudio) for the radio's USB codec at 48 kHz, 16-bit mono, resampled for the network path. TODO(verify) the sample rates each radio's codec accepts.
 
