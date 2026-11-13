@@ -38,6 +38,20 @@ transmits in voice modes. Change it back for local operation.
   lines low from the moment it opens the port (tested, H7300-3). Whether the
   operating system drops the line when the process dies is not yet tested.
 
+### On the computer (macOS)
+
+Grant the server Microphone access: System Settings > Privacy & Security >
+Microphone, and turn on the app that runs the server (Terminal, or the
+LaunchAgent's program). Without it macOS hands the server silence from the
+radio's codec, so receive audio is silent even in listen-only mode
+(hardware test H7300-16).
+
+In the browser's Audio panel, pick the microphone and speaker you mean to
+use. The system default may be another device (on the maintainer's Mac it
+was an audio mixer). The radio's own "USB Audio CODEC" is listed but
+disabled, because using it as the browser mic would loop receive audio into
+transmit.
+
 ## IC-705, IC-9700
 
 Added in P4, from each radio's own manual.
