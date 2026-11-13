@@ -44,7 +44,8 @@ jobs:
           python -m venv .tools
           if [ -x .tools/bin/python ]; then T=.tools/bin; else T=.tools/Scripts; fi
           "$T/python" -m pip install --quiet uv
-          echo "$PWD/$T" >> "$GITHUB_PATH"
+          # Native path (D:\a\... on Windows): PowerShell steps cannot use /d/a/...
+          "$T/python" -c "import pathlib, sys; print(pathlib.Path(sys.executable).parent)" >> "$GITHUB_PATH"
 
       - name: Sync environment (locked)
         run: uv sync --locked --python ${{ matrix.python }}
