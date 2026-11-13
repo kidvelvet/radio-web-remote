@@ -23,6 +23,10 @@ from radio_web_remote.config import PttConfig, RadioConfig
 from radio_web_remote.devices.serial_ports import resolve_port
 from radio_web_remote.radios import registry
 from radio_web_remote.radios.base import (
+    Feature,
+    Level,
+    Meter,
+    MeterReading,
     ModeSetting,
     RadioDriver,
     RadioError,
@@ -64,12 +68,16 @@ class RadioState:
     filter: int | None = None
     features: tuple[str, ...] = ()
     modes: tuple[str, ...] = ()
+    data_mode: bool | None = None
+    levels: dict[str, int] = field(default_factory=dict)  # "af" -> 0..255
+    meters: dict[str, dict[str, Any]] = field(default_factory=dict)
     tx: TxStatus = field(default_factory=lambda: TxStatus(False))
 
     def to_json(self) -> dict[str, Any]:
         d = asdict(self)
         d["tx"] = {
             "transmitting": self.tx.transmitting,
+            "keyed": self.tx.keyed,
             "holder": self.tx.holder_callsign,
             "since": self.tx.since,
             "last_stop": self.tx.last_stop_reason.value if self.tx.last_stop_reason else None,
@@ -106,6 +114,7 @@ class RadioStation:
         backoff_s: tuple[float, float] = (0.5, 5.0),
         response_timeout_s: float = 0.5,
         tx_watchdog_s: float = 0.1,
+        meter_interval_s: float = 0.25,
     ) -> None:
         self.cfg = cfg
         self._factory = transport_factory or self._serial_factory
@@ -113,6 +122,7 @@ class RadioStation:
         self._lost_after = lost_after_timeouts
         self._backoff = backoff_s
         self._response_timeout = response_timeout_s
+        self._meter_interval = meter_interval_s
         self._driver: RadioDriver | None = None
         self._connected = False
         self._connected_once = False
@@ -125,6 +135,7 @@ class RadioStation:
             _PttProxy(self),
             ptt,
             frequency=lambda: self.state.frequency_hz,
+            power=lambda: self.state.levels.get(Level.RF_POWER.value),
             audit=audit,
             watchdog_interval_s=tx_watchdog_s,
         )
@@ -206,19 +217,70 @@ class RadioStation:
             features=tuple(sorted(f.value for f in driver.features)),
             modes=tuple(m.value for m in driver.modes),
         )
-        timeouts = 0
+        slow = self._slow_items(driver)
+        for item in slow:  # read everything once up front
+            await self._poll_slow(driver, item)
+        meters = asyncio.create_task(self._meter_loop(driver), name=f"meters-{self.cfg.id}")
+        try:
+            timeouts = 0
+            turn = 0
+            while True:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(lost.wait(), self._poll_interval)
+                if lost.is_set():
+                    raise RadioLost("serial link error")
+                if meters.done() and meters.exception() is not None:
+                    raise RadioLost(f"meter polling failed: {meters.exception()}")
+                try:
+                    await self._poll_once(driver)
+                    if slow:  # one slow item per tick, round robin
+                        await self._poll_slow(driver, slow[turn % len(slow)])
+                        turn += 1
+                    timeouts = 0
+                except RadioTimeout:
+                    timeouts += 1
+                    if timeouts >= self._lost_after:
+                        raise RadioLost(f"no answer to {timeouts} polls in a row") from None
+        finally:
+            meters.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await meters
+
+    @staticmethod
+    def _slow_items(driver: RadioDriver) -> list[Level | str]:
+        items: list[Level | str] = [
+            lv for lv in Level if Feature(f"level_{lv.value}") in driver.features
+        ]
+        if Feature.DATA_MODE in driver.features:
+            items.append("data_mode")
+        return items
+
+    async def _poll_slow(self, driver: RadioDriver, item: Level | str) -> None:
+        if item == "data_mode":
+            on = await driver.get_data_mode()
+            self._update(data_mode=on)
+            return
+        assert isinstance(item, Level)
+        value = await driver.get_level(item)
+        if self.state.levels.get(item.value) != value:
+            self._update(levels={**self.state.levels, item.value: value})
+            if item is Level.RF_POWER:
+                await self.tx.power_changed(value)
+
+    async def _meter_loop(self, driver: RadioDriver) -> None:
+        """S-meter on receive; Po, SWR, ALC while transmitting. Timeouts are not fatal here."""
+        feats = driver.features
+        rx = [Meter.S] if Feature.METER_S in feats else []
+        tx = [m for m in (Meter.PO, Meter.SWR, Meter.ALC) if Feature(f"meter_{m.value}") in feats]
         while True:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(lost.wait(), self._poll_interval)
-            if lost.is_set():
-                raise RadioLost("serial link error")
-            try:
-                await self._poll_once(driver)
-                timeouts = 0
-            except RadioTimeout:
-                timeouts += 1
-                if timeouts >= self._lost_after:
-                    raise RadioLost(f"no answer to {timeouts} polls in a row") from None
+            await asyncio.sleep(self._meter_interval)
+            wanted = tx if self.tx.status.transmitting else rx
+            readings: dict[str, dict[str, Any]] = {}
+            for m in wanted:
+                with contextlib.suppress(RadioTimeout):
+                    readings[m.value] = _reading_json(await driver.get_meter(m))
+            if readings:
+                self._update(meters=readings)
 
     async def _poll_once(self, driver: RadioDriver) -> None:
         hz = await driver.get_frequency()
@@ -283,8 +345,28 @@ class RadioStation:
         self._update(frequency_hz=hz)
         await self.tx.frequency_changed(hz)
 
+    async def set_level(self, op: Operator, level: Level, value: int) -> None:
+        driver = self._require_control(op)
+        if not 0 <= value <= 255:
+            raise ValueError("level must be 0..255")
+        if level is Level.RF_POWER and not op.limits.allows_power(value):
+            raise ControlDenied("RF power above your limit")
+        await driver.set_level(level, value)
+        self._update(levels={**self.state.levels, level.value: value})
+        if level is Level.RF_POWER:
+            await self.tx.power_changed(value)
+
+    async def set_data_mode(self, op: Operator, on: bool) -> None:
+        driver = self._require_control(op)
+        await driver.set_data_mode(on, self.state.filter if on else None)
+        self._update(data_mode=on)
+
     async def set_mode(self, op: Operator, setting: ModeSetting) -> None:
         driver = self._require_control(op)
         await driver.set_mode(setting)
         # Filter omitted means "the mode's default" (p. 19-8); the next poll fills it in.
         self._update(mode=setting.mode.value, filter=setting.filter)
+
+
+def _reading_json(r: MeterReading) -> dict[str, Any]:
+    return {"raw": r.raw, "value": r.value, "unit": r.unit, "db_over_s9": r.db_over_s9}

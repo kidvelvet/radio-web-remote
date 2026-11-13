@@ -9,6 +9,8 @@ Client -> server (JSON):
   {"type": "visibility", "hidden": true | false}
   {"type": "set_frequency", "hz": 14074000}
   {"type": "set_mode", "mode": "USB", "filter": 1 | null}
+  {"type": "set_level", "level": "af" | "rf_gain" | "squelch" | "rf_power", "value": 0..255}
+  {"type": "set_data_mode", "on": true | false}
 
 Server -> client (JSON):
   {"type": "hello", "conn": ..., "user": {...}, "radio": "<id>"}
@@ -33,7 +35,7 @@ from typing import Any
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from radio_web_remote.config import PttConfig
-from radio_web_remote.radios.base import Mode, ModeSetting, RadioError
+from radio_web_remote.radios.base import Level, Mode, ModeSetting, RadioError
 from radio_web_remote.security.users import Session
 from radio_web_remote.station.radio_station import ControlDenied, RadioState, RadioStation
 from radio_web_remote.station.tx_controller import Operator, StopReason, TxDenied
@@ -215,6 +217,17 @@ class Hub:
                 if flt is not None and flt not in (1, 2, 3):
                     raise ValueError("filter must be 1, 2, 3 or null")
                 await station.set_mode(op, ModeSetting(mode, flt))
+            elif kind == "set_level":
+                level = Level(str(msg.get("level")))
+                value = msg.get("value")
+                if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 255:
+                    raise ValueError("value must be an integer 0..255")
+                await station.set_level(op, level, value)
+            elif kind == "set_data_mode":
+                on = msg.get("on")
+                if not isinstance(on, bool):
+                    raise ValueError("on must be true or false")
+                await station.set_data_mode(op, on)
             else:
                 raise ValueError(f"unknown message type {kind!r}")
         except TxDenied as exc:

@@ -31,6 +31,40 @@ class Feature(Enum):
     FILTER = "filter"
     PTT = "ptt"
     TRANSCEIVE = "transceive"  # radio pushes front-panel changes unprompted
+    DATA_MODE = "data_mode"
+    LEVEL_AF = "level_af"
+    LEVEL_RF_GAIN = "level_rf_gain"
+    LEVEL_SQUELCH = "level_squelch"
+    LEVEL_RF_POWER = "level_rf_power"
+    METER_S = "meter_s"
+    METER_PO = "meter_po"
+    METER_SWR = "meter_swr"
+    METER_ALC = "meter_alc"
+
+
+class Level(Enum):
+    """Knob-style controls, as 0..255 of the radio's own range."""
+
+    AF = "af"
+    RF_GAIN = "rf_gain"
+    SQUELCH = "squelch"
+    RF_POWER = "rf_power"  # position of the RF power control, not watts
+
+
+class Meter(Enum):
+    S = "s"
+    PO = "po"
+    SWR = "swr"
+    ALC = "alc"
+
+
+@dataclass(frozen=True, slots=True)
+class MeterReading:
+    meter: Meter
+    raw: int  # 0..255 as the radio reports it
+    value: float | None  # in `unit`, from the documented calibration points
+    unit: str  # "S" (S units; above S9 see db_over_s9), "%", "SWR"
+    db_over_s9: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +145,22 @@ class RadioDriver(ABC):
     @abstractmethod
     async def unkey(self, verify: bool = True) -> None:
         """Stop transmitting, ahead of all queued traffic; with verify, confirm RX or raise."""
+
+    # Optional controls: drivers override what their documents support.
+    async def get_level(self, level: Level) -> int:
+        raise Unsupported(f"{self.model_name} has no documented {level.value} level")
+
+    async def set_level(self, level: Level, value: int) -> None:
+        raise Unsupported(f"{self.model_name} has no documented {level.value} level")
+
+    async def get_meter(self, meter: Meter) -> MeterReading:
+        raise Unsupported(f"{self.model_name} has no documented {meter.value} meter")
+
+    async def get_data_mode(self) -> bool:
+        raise Unsupported(f"{self.model_name} has no documented DATA mode")
+
+    async def set_data_mode(self, on: bool, filter: int | None = None) -> None:
+        raise Unsupported(f"{self.model_name} has no documented DATA mode")
 
     def add_listener(self, listener: StateListener) -> None:
         self._listeners.append(listener)

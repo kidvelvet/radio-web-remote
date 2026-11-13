@@ -109,6 +109,10 @@ def tx_state(msg):
     return msg["type"] == "state" and msg["state"]["tx"]
 
 
+def keyed(msg):
+    return tx_state(msg) and msg["state"]["tx"]["keyed"]
+
+
 # -- headers and public pages ----------------------------------------------------
 
 
@@ -250,7 +254,7 @@ def test_ws_ptt_and_close_unkeys_server_side(env):
     with wsc(c, "/ws") as ws:
         ws.receive_json()
         ws.send_json({"type": "ptt", "down": True})
-        recv_until(ws, lambda m: tx_state(m) and m["state"]["tx"]["transmitting"])
+        recv_until(ws, keyed)
         assert env["sim"].state.transmitting
         assert env["station"].state.tx.holder_callsign == "N0CALL"
     # Socket closed with PTT still down: the server must unkey on its own.
@@ -267,7 +271,7 @@ def test_ws_heartbeat_loss_unkeys(env):
     with wsc(c, "/ws") as ws:
         ws.receive_json()
         ws.send_json({"type": "ptt", "down": True})
-        recv_until(ws, lambda m: tx_state(m) and m["state"]["tx"]["transmitting"])
+        recv_until(ws, keyed)
         msg = recv_until(ws, lambda m: tx_state(m) and not m["state"]["tx"]["transmitting"])
         assert msg["state"]["tx"]["last_stop"] == "heartbeat_lost"
 
@@ -278,7 +282,7 @@ def test_ws_hidden_unkeys(env):
     with wsc(c, "/ws") as ws:
         ws.receive_json()
         ws.send_json({"type": "ptt", "down": True})
-        recv_until(ws, lambda m: tx_state(m) and m["state"]["tx"]["transmitting"])
+        recv_until(ws, keyed)
         ws.send_json({"type": "visibility", "hidden": True})
         msg = recv_until(ws, lambda m: tx_state(m) and not m["state"]["tx"]["transmitting"])
         assert msg["state"]["tx"]["last_stop"] == "hidden"
@@ -368,7 +372,7 @@ def test_logout_unkeys_and_closes_socket(env):
     with wsc(c, "/ws") as ws:
         ws.receive_json()
         ws.send_json({"type": "ptt", "down": True})
-        recv_until(ws, lambda m: tx_state(m) and m["state"]["tx"]["transmitting"])
+        recv_until(ws, keyed)
         assert c.post("/api/logout", headers={"x-csrf-token": csrf}).status_code == 200
         with pytest.raises(WebSocketDisconnect):
             recv_until(ws, lambda m: False)
@@ -382,7 +386,7 @@ def test_tx_audit_entries(env):
     with wsc(c, "/ws") as ws:
         ws.receive_json()
         ws.send_json({"type": "ptt", "down": True})
-        recv_until(ws, lambda m: tx_state(m) and m["state"]["tx"]["transmitting"])
+        recv_until(ws, keyed)
         ws.send_json({"type": "ptt", "down": False})
         recv_until(ws, lambda m: tx_state(m) and not m["state"]["tx"]["transmitting"])
     lines = [json.loads(x) for x in (env["tmp"] / "audit.log").read_text().splitlines()]
@@ -394,3 +398,22 @@ def test_tx_audit_entries(env):
         and start["frequency_hz"] == 14_074_000
     )
     assert stop["reason"] == "released" and stop["duration_s"] >= 0
+
+
+def test_ws_levels_and_data_mode(env):
+    c = env["client"]
+    login(c)
+    with wsc(c) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "set_level", "level": "af", "value": 77})
+        recv_until(ws, lambda m: m["type"] == "state" and m["state"]["levels"].get("af") == 77)
+        ws.send_json({"type": "set_data_mode", "on": True})
+        recv_until(ws, lambda m: m["type"] == "state" and m["state"]["data_mode"] is True)
+        for bad in (
+            {"type": "set_level", "level": "volume", "value": 1},
+            {"type": "set_level", "level": "af", "value": 300},
+            {"type": "set_data_mode", "on": "yes"},
+        ):
+            ws.send_json(bad)
+            assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"
+    assert env["sim"].state.levels[0x01] == 77 and env["sim"].state.data_mode

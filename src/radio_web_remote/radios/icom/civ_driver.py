@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
 
 from radio_web_remote.asyncutil import PriorityLock
@@ -30,6 +31,9 @@ from radio_web_remote.protocols.civ.commands import CivCommand, ReplyError
 from radio_web_remote.protocols.civ.frame import Frame, FrameParser, encode_frame
 from radio_web_remote.radios.base import (
     Feature,
+    Level,
+    Meter,
+    MeterReading,
     Mode,
     ModeSetting,
     RadioDriver,
@@ -38,7 +42,7 @@ from radio_web_remote.radios.base import (
     StateEvent,
     Unsupported,
 )
-from radio_web_remote.radios.icom.model import IcomModel
+from radio_web_remote.radios.icom.model import LEVEL_COMMANDS, METER_COMMANDS, IcomModel, MeterCal
 from radio_web_remote.transport.base import ByteTransport, Priority
 
 log = logging.getLogger(__name__)
@@ -235,6 +239,39 @@ class IcomCivDriver(RadioDriver):
             filter_code = f.value
         await self._transact(CivCommand.SET_MODE, cmd.set_mode(entry.value, filter_code), False)
 
+    # -- levels, meters, DATA mode -----------------------------------------
+    async def get_level(self, level: Level) -> int:
+        command = LEVEL_COMMANDS[level]
+        reply = await self._transact(command, cmd.read_value(command), True, Priority.POLL)
+        return cmd.parse_level(command, reply.payload)
+
+    async def set_level(self, level: Level, value: int) -> None:
+        command = LEVEL_COMMANDS[level]
+        await self._transact(command, cmd.set_level(command, value), False)
+
+    async def get_meter(self, meter: Meter) -> MeterReading:
+        command = METER_COMMANDS[meter]
+        cal = self.model.meters.get(meter)
+        if cal is None:
+            raise Unsupported(f"{self.model.name} table has no calibration for {meter.value}")
+        reply = await self._transact(command, cmd.read_value(command), True, Priority.POLL)
+        return convert_meter(meter, cmd.parse_level(command, reply.payload), cal)
+
+    async def get_data_mode(self) -> bool:
+        command = CivCommand.DATA_MODE
+        reply = await self._transact(command, cmd.read_value(command), True, Priority.POLL)
+        on, _ = cmd.parse_data_mode(reply.payload)
+        return on
+
+    async def set_data_mode(self, on: bool, filter: int | None = None) -> None:
+        code = None
+        if filter is not None:
+            entry = self.model.filters.get(filter)
+            if entry is None:
+                raise Unsupported(f"{self.model.name} table has no filter {filter}")
+            code = entry.value
+        await self._transact(CivCommand.DATA_MODE, cmd.set_data_mode(on, code), False)
+
     # -- PTT -------------------------------------------------------------
     async def get_ptt(self) -> bool:
         reply = await self._transact(
@@ -289,3 +326,26 @@ class IcomCivDriver(RadioDriver):
         raise RadioTimeout(
             f"{self.model.name} did not report RX within {UNKEY_CONFIRM_S}s of TX off"
         )
+
+
+def _interpolate(points: tuple[tuple[int, float], ...], raw: int) -> float:
+    if raw <= points[0][0]:
+        return points[0][1]
+    for (x0, y0), (x1, y1) in itertools.pairwise(points):
+        if raw <= x1:
+            return y0 + (y1 - y0) * (raw - x0) / (x1 - x0)
+    return points[-1][1]
+
+
+def convert_meter(meter: Meter, raw: int, cal: MeterCal) -> MeterReading:
+    """Map a raw 0..255 reading through the manual's calibration points.
+
+    Readings beyond the last printed point are reported as the last point's
+    value with raw kept, so the UI can show "over" instead of inventing a number.
+    """
+    last_raw = cal.points[-1][0]
+    if cal.over_s9_points is not None and raw > last_raw:
+        over = _interpolate(cal.over_s9_points, raw)
+        return MeterReading(meter, raw, cal.points[-1][1], cal.unit, round(over, 1))
+    value = None if raw > last_raw else round(_interpolate(cal.points, raw), 2)
+    return MeterReading(meter, raw, value, cal.unit)

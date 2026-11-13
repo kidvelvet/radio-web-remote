@@ -225,3 +225,26 @@ async def test_connect_clears_key_left_by_crashed_process():
     assert await driver.get_ptt() is False
     await driver.close()
     await radio_end.close()
+
+
+async def test_levels_meters_and_data_mode(rig):
+    from radio_web_remote.radios.base import Level, Meter
+
+    driver, sim, _ = rig
+    assert await driver.get_level(Level.AF) == 128
+    await driver.set_level(Level.RF_POWER, 64)
+    assert sim.state.levels[0x0A] == 64 and await driver.get_level(Level.RF_POWER) == 64
+    s = await driver.get_meter(Meter.S)
+    assert s.raw == 60 and s.unit == "S"
+    assert (await driver.get_meter(Meter.PO)).raw == 0  # receive: no output
+    await driver.key()
+    await asyncio.sleep(0.01)
+    # raw 150 between the printed points 143 (50%) and 213 (100%): 50 + 50 * 7/70
+    assert (await driver.get_meter(Meter.PO)).value == pytest.approx(55.0)
+    assert (await driver.get_meter(Meter.SWR)).value == pytest.approx(1.31, abs=0.01)
+    await driver.unkey()
+    assert await driver.get_data_mode() is False
+    await driver.set_data_mode(True, 2)
+    assert sim.state.data_mode and sim.state.filter_code == 0x02
+    await driver.set_data_mode(False)
+    assert not sim.state.data_mode

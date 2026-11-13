@@ -51,7 +51,16 @@ class TxLimits:
     """Per-user limits set by an admin. None means no limit of that kind."""
 
     bands_hz: tuple[tuple[int, int], ...] | None = None  # inclusive (low, high) ranges
-    max_power_pct: float | None = None  # checked once RF power control lands
+    # Highest RF power *control position* allowed, in percent of its range
+    # (IC-7300: 14 0A, 0000=max CCW to 0255=max CW, p. 19-3). Not watts.
+    max_power_pct: float | None = None
+
+    def allows_power(self, raw: int | None) -> bool:
+        if self.max_power_pct is None:
+            return True
+        if raw is None:
+            return False
+        return raw * 100 / 255 <= self.max_power_pct + 1e-9
 
     def allows_frequency(self, hz: int | None) -> bool:
         if self.bands_hz is None:
@@ -103,11 +112,12 @@ class TxDenied(Exception):
 
 @dataclass(frozen=True, slots=True)
 class TxStatus:
-    transmitting: bool
+    transmitting: bool  # someone holds the TX lock (keying may still be in progress)
     holder_callsign: str | None = None
     holder_session: str | None = None
     since: float | None = None  # wall clock (time.time) when TX started
     last_stop_reason: StopReason | None = None
+    keyed: bool = False  # the radio acknowledged TX for the current holder
 
 
 class PttDriver(Protocol):
@@ -130,6 +140,7 @@ class TxController:
         ptt: PttConfig,
         frequency: Callable[[], int | None],
         audit: AuditSink | None = None,
+        power: Callable[[], int | None] = lambda: None,
         watchdog_interval_s: float = WATCHDOG_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -137,6 +148,7 @@ class TxController:
         self.driver = driver
         self.ptt = ptt
         self._frequency = frequency
+        self._power = power
         self._audit = audit
         self._interval = watchdog_interval_s
         self._clock = clock
@@ -176,7 +188,9 @@ class TxController:
         h = self._holder
         if h is None:
             return TxStatus(False, last_stop_reason=self._last_stop)
-        return TxStatus(True, h.callsign, h.session_id, self._started_wall, self._last_stop)
+        return TxStatus(
+            True, h.callsign, h.session_id, self._started_wall, self._last_stop, self._keyed
+        )
 
     @property
     def unkey_unconfirmed(self) -> bool:
@@ -216,6 +230,8 @@ class TxController:
             hz = self._frequency()
             if not op.limits.allows_frequency(hz):
                 raise TxDenied(DenyReason.OUT_OF_LIMITS, f"{hz} Hz is outside this user's bands")
+            if not op.limits.allows_power(self._power()):
+                raise TxDenied(DenyReason.OUT_OF_LIMITS, "RF power is above this user's limit")
 
             self._generation += 1
             generation = self._generation
@@ -236,6 +252,7 @@ class TxController:
             if not keyed or self._generation != generation:
                 return  # an unkey overtook this request; it already cleaned up
             self._keyed = True
+            self._notify()
             self._emit_audit("tx_start", op, frequency_hz=hz)
 
     async def ptt_up(self, op: Operator) -> None:
@@ -257,6 +274,11 @@ class TxController:
     async def radio_lost(self) -> None:
         """The radio link dropped. Clear any holder; reconnect sends TX off first."""
         await self._stop(StopReason.RADIO_ERROR, force=True)
+
+    async def power_changed(self, raw: int) -> None:
+        holder = self._holder
+        if holder is not None and not holder.limits.allows_power(raw):
+            await self._stop(StopReason.OUT_OF_LIMITS)
 
     async def frequency_changed(self, hz: int) -> None:
         holder = self._holder

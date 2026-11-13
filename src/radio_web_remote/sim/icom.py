@@ -27,7 +27,7 @@ from radio_web_remote.protocols.civ.bcd import BcdError, decode_frequency, encod
 from radio_web_remote.protocols.civ.commands import CivCommand
 from radio_web_remote.protocols.civ.frame import NG, OK, Frame, FrameParser, encode_frame
 from radio_web_remote.radios.base import Mode
-from radio_web_remote.radios.icom.model import IcomModel
+from radio_web_remote.radios.icom.model import LEVEL_COMMANDS, METER_COMMANDS, IcomModel
 from radio_web_remote.transport.loopback import LoopbackEnd
 
 TRANSCEIVE_TO = 0x00  # observed on IC-7300 hardware; see civ_driver.BROADCAST
@@ -39,6 +39,14 @@ class SimState:
     mode_code: int = 0x01  # USB on the IC-7300 table
     filter_code: int = 0x01
     transmitting: bool = False
+    data_mode: bool = False
+    levels: dict[int, int] = field(
+        default_factory=lambda: {0x01: 128, 0x02: 255, 0x03: 0, 0x0A: 128}  # AF RF SQL PWR
+    )
+    s_meter: int = 60
+    tx_meters: dict[int, int] = field(
+        default_factory=lambda: {0x11: 150, 0x12: 30, 0x13: 40}  # Po SWR ALC while keyed
+    )
 
 
 @dataclass
@@ -132,6 +140,36 @@ class IcomSimulator:
         p = frame.payload
         m = self.model
         ok, ng = bytes([OK]), bytes([NG])
+
+        level_cmds = {c.prefix: c for c in LEVEL_COMMANDS.values() if m.supports(c)}
+        meter_cmds = {c.prefix: c for c in METER_COMMANDS.values() if m.supports(c)}
+        if p[:2] in level_cmds:
+            sub = p[1]
+            if len(p) == 2:
+                return p + cmd.encode_level(self.state.levels.get(sub, 0))
+            try:
+                self.state.levels[sub] = cmd.decode_level(p[2:])
+            except cmd.ReplyError:
+                return ng
+            return ok
+        if p[:2] in meter_cmds and len(p) == 2:
+            sub = p[1]
+            if sub == 0x02:
+                value = self.state.s_meter
+            else:
+                value = self.state.tx_meters.get(sub, 0) if self.reported_tx(now) else 0
+            return p + cmd.encode_level(value)
+        if p[:2] == CivCommand.DATA_MODE.prefix and m.supports(CivCommand.DATA_MODE):
+            data = p[2:]
+            if not data:
+                flt = self.state.filter_code if self.state.data_mode else 0
+                return p + bytes([int(self.state.data_mode), flt])
+            if len(data) == 2 and data[0] in (0, 1):
+                self.state.data_mode = data[0] == 1
+                if data[0] == 1 and data[1]:
+                    self.state.filter_code = data[1]
+                return ok
+            return ng
 
         if p == cmd.read_frequency() and m.supports(CivCommand.READ_FREQUENCY):
             return b"\x03" + encode_frequency(self.state.frequency_hz)

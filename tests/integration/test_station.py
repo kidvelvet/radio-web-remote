@@ -157,3 +157,49 @@ async def test_controls_refused_while_disconnected(bench):
     await wait_for(lambda: not bench.station.state.connected)
     with pytest.raises(Exception, match="not connected"):
         await bench.station.set_frequency(ALICE, 7_000_000)
+
+
+POWER_CAPPED = Operator(
+    "sess-dave-0006", "dave", "N4CALL", Role.OPERATOR, TxLimits(max_power_pct=50.0)
+)
+
+
+async def test_state_has_levels_data_mode_and_meters(bench):
+    await wait_for(lambda: "s" in bench.station.state.meters)
+    st = bench.station.state
+    assert st.levels == {"af": 128, "rf_gain": 255, "squelch": 0, "rf_power": 128}
+    assert st.data_mode is False
+    assert st.meters["s"]["raw"] == 60
+    await bench.station.tx.ptt_down(ALICE)
+    await wait_for(lambda: "swr" in bench.station.state.meters)
+    assert bench.station.state.meters["po"]["raw"] == 150
+    await bench.station.tx.ptt_up(ALICE)
+
+
+async def test_level_and_data_controls(bench):
+    from radio_web_remote.radios.base import Level
+
+    await bench.station.set_level(ALICE, Level.AF, 200)
+    assert bench.sim.state.levels[0x01] == 200 and bench.station.state.levels["af"] == 200
+    await bench.station.set_data_mode(ALICE, True)
+    assert bench.sim.state.data_mode and bench.station.state.data_mode
+    with pytest.raises(ControlDenied):
+        await bench.station.set_level(LEE, Level.AF, 10)
+
+
+async def test_power_limit(bench):
+    from radio_web_remote.radios.base import Level
+    from radio_web_remote.station.tx_controller import TxDenied
+
+    # Knob at 128/255 = 50.2% is above a 50% cap: keying is refused.
+    with pytest.raises(TxDenied):
+        await bench.station.tx.ptt_down(POWER_CAPPED)
+    with pytest.raises(ControlDenied):
+        await bench.station.set_level(POWER_CAPPED, Level.RF_POWER, 200)
+    await bench.station.set_level(POWER_CAPPED, Level.RF_POWER, 100)
+    await bench.station.tx.ptt_down(POWER_CAPPED)
+    assert bench.sim.state.transmitting
+    # Someone turns the RF power knob up on the front panel while keyed: the poll sees it.
+    bench.sim.state.levels[0x0A] = 230
+    await wait_for(lambda: not bench.sim.reported_tx(), timeout=3.0)
+    assert bench.station.state.tx.last_stop_reason.value == "out_of_limits"
