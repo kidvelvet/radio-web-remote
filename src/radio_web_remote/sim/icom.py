@@ -193,6 +193,16 @@ def push_unsolicited(end: LoopbackEnd, data: bytes) -> None:
 class PtyRunner:
     """Serve the simulator on a POSIX pseudo-terminal. `path` is what a driver opens."""
 
+    # Declared here because on Windows mypy treats the body of __init__ after
+    # the platform check as unreachable and would otherwise not type these.
+    sim: IcomSimulator
+    path: str
+    _master: int
+    _slave: int
+    _stop: threading.Event
+    _lock: threading.Lock
+    _thread: threading.Thread
+
     def __init__(self, sim: IcomSimulator) -> None:
         if sys.platform == "win32":
             raise OSError("pseudo-terminals are not available on Windows; use attach_loopback")
