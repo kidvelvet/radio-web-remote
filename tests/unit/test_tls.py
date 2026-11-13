@@ -147,3 +147,26 @@ def test_name_outside_constraints_is_left_out_with_a_message(tmp_path):
     files, changed = tls.ensure_certificates(later, tmp_path)
     assert "radio.example.com" in changed and "cert reset" in changed
     assert "radio.example.com" not in tls.cert_sans(files.cert_file).dns
+
+
+MAC_IFCONFIG = """en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet6 fe80::1c2b:3d4e:5f60:7182%en0 prefixlen 64 secured scopeid 0xe
+	inet 192.168.25.114 netmask 0xffffff00 broadcast 192.168.25.255
+en1: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 192.168.25.116 netmask 0xffffff00 broadcast 192.168.25.255
+utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
+	inet 100.101.102.103 --> 100.101.102.103 netmask 0xffffffff
+"""
+LINUX_IP = """1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever
+2: eth0    inet 10.0.1.20/24 brd 10.0.1.255 scope global eth0\\       valid_lft forever
+2: eth0    inet6 fd00::20/64 scope global\\       valid_lft forever
+"""
+
+
+def test_parse_interface_addresses():
+    mac = tls.parse_interface_addresses(MAC_IFCONFIG)
+    assert {
+        ipaddress.ip_address(a) for a in ("192.168.25.114", "192.168.25.116", "100.101.102.103")
+    } <= mac
+    lin = tls.parse_interface_addresses(LINUX_IP)
+    assert {ipaddress.ip_address(a) for a in ("127.0.0.1", "10.0.1.20", "fd00::20")} <= lin

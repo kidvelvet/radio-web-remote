@@ -18,7 +18,9 @@ import contextlib
 import datetime as dt
 import ipaddress
 import os
+import re
 import socket
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,9 +77,32 @@ def tls_dir(data_dir: Path) -> Path:
     return data_dir / "tls"
 
 
+_ADDR = re.compile(r"\binet6?\s+(?:addr:)?([0-9a-fA-F:.]+)(?:%\w+)?")
+
+
+def parse_interface_addresses(text: str) -> set[IPAddr]:
+    """Addresses from `ifconfig` or `ip -o addr` output (both use 'inet'/'inet6')."""
+    out: set[IPAddr] = set()
+    for m in _ADDR.finditer(text):
+        with contextlib.suppress(ValueError):
+            out.add(ipaddress.ip_address(m.group(1).split("/")[0]))
+    return out
+
+
+def _interface_addresses() -> set[IPAddr]:
+    for cmd in (["ip", "-o", "addr"], ["ifconfig"], ["ifconfig", "-a"]):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=False)  # noqa: S603
+            if r.returncode == 0 and r.stdout:
+                return parse_interface_addresses(r.stdout)
+    return set()
+
+
 def local_addresses() -> set[IPAddr]:
-    """Best-effort list of this host's addresses, without extra dependencies."""
+    """This host's addresses, without extra dependencies: every interface (from ip/ifconfig),
+    the hostname's addresses, and the default-route address."""
     found: set[IPAddr] = {ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")}
+    found |= _interface_addresses()
     with contextlib.suppress(OSError):
         for info in socket.getaddrinfo(socket.gethostname(), None):
             with contextlib.suppress(ValueError):
