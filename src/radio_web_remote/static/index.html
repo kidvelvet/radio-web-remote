@@ -114,6 +114,10 @@
         </select></label>
         <button type="button" id="au-start" class="primary">Start audio</button>
       </div>
+      <div class="row wrap devices">
+        <label class="inline">Mic <select id="au-mic-dev"><option value="">System default</option></select></label>
+        <label class="inline" id="au-spk-wrap">Speaker <select id="au-spk-dev"><option value="">System default</option></select></label>
+      </div>
       <div class="level"><label for="au-vol">Volume</label><input type="range" id="au-vol" min="0" max="200" value="100"><span id="au-vol-t">100%</span></div>
       <div class="meter"><label for="au-mic">Mic</label><meter id="au-mic" min="-60" max="0" low="-12" high="-3" optimum="-20" value="-60"></meter><span id="au-mic-t">-</span></div>
       <details>

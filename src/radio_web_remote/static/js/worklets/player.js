@@ -19,6 +19,7 @@ class RxPlayer extends AudioWorkletProcessor {
     this.step = NET_RATE / sampleRate;
     this.underruns = 0;
     this.trims = 0;
+    this.peak = 0;
     this.lastReport = 0;
     this.port.onmessage = (ev) => this.push(ev.data);
   }
@@ -28,7 +29,12 @@ class RxPlayer extends AudioWorkletProcessor {
   push(samples) {  // Int16Array
     const n = samples.length, cap = this.buf.length;
     if (this.buffered + n > cap) this.read = this.write + n - cap;  // overflow: drop oldest
-    for (let i = 0; i < n; i++) this.buf[(this.write + i) % cap] = samples[i] / 32768;
+    for (let i = 0; i < n; i++) {
+      const v = samples[i] / 32768;
+      this.buf[(this.write + i) % cap] = v;
+      const a = v < 0 ? -v : v;
+      if (a > this.peak) this.peak = a;
+    }
     this.write += n;
     if (this.buffered > (MAX_MS * NET_RATE) / 1000) {
       this.read = this.write - (TRIM_MS * NET_RATE) / 1000;
@@ -58,7 +64,9 @@ class RxPlayer extends AudioWorkletProcessor {
       this.port.postMessage({
         bufferedMs: Math.round((this.buffered * 1000) / NET_RATE),
         underruns: this.underruns, trims: this.trims,
+        peakDb: this.peak > 0 ? Math.round(20 * Math.log10(this.peak)) : -120,
       });
+      this.peak = 0;
     }
     return true;
   }

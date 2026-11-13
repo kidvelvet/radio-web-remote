@@ -4,7 +4,7 @@
 // fast paths only: it releases PTT on pointer up, key up, window blur, page
 // hidden and page hide, and sends heartbeats while connected.
 
-import { AudioUnavailable, BrowserAudio } from "./audio.js";
+import { AudioUnavailable, BrowserAudio, canPickSpeaker, isRadioCodec, listDevices } from "./audio.js";
 import { Scope } from "./scope.js";
 
 const $ = (id) => document.getElementById(id);
@@ -441,7 +441,8 @@ function audioStatus() {
   if (!app.audioMode) return "Audio is off. Tap Start audio.";
   if (app.audioMode === "host") return "Using the radio computer's microphone and speaker.";
   const st = app.rxStats;
-  const rx = st ? `buffer ${st.bufferedMs} ms, ${st.underruns} gaps` : "waiting for audio";
+  const lvl = st && st.peakDb != null ? (st.peakDb <= -100 ? ", silent" : `, level ${st.peakDb} dB`) : "";
+  const rx = st ? `buffer ${st.bufferedMs} ms, ${st.underruns} gaps${lvl}` : "waiting for audio";
   return app.audioMode === "monitor" ? `Listening: ${rx}.` : `Mic and speaker on: ${rx}.`;
 }
 
@@ -474,7 +475,10 @@ async function startAudio() {
           autoGainControl: $("au-agc").checked,
         },
         volume: Number($("au-vol").value) / 100,
+        micId: $("au-mic-dev").value || null,
+        speakerId: $("au-spk-dev").value || null,
       });
+      await fillDevices();  // labels are only visible after mic permission
     }
     app.audioMode = mode;
     send({ type: "audio", mode });
@@ -509,7 +513,32 @@ async function stopAudio() {
   $("au-status").textContent = audioStatus();
 }
 
+function remember(key, value) { try { localStorage.setItem(key, value); } catch { /* fine */ } }
+function recall(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
+
+async function fillDevices() {
+  const { inputs, outputs } = await listDevices();
+  const fill = (sel, devs, key) => {
+    const keep = sel.value || recall(key);
+    sel.replaceChildren(new Option("System default", ""));
+    for (const d of devs) {
+      const radio = isRadioCodec(d.label);
+      const o = new Option(radio ? `${d.label} (the radio: do not use)` : d.label || "Unnamed device", d.deviceId);
+      o.disabled = radio;
+      sel.append(o);
+    }
+    if ([...sel.options].some((o) => o.value === keep && !o.disabled)) sel.value = keep;
+  };
+  fill($("au-mic-dev"), inputs, "rwr.audio.mic");
+  fill($("au-spk-dev"), outputs, "rwr.audio.speaker");
+}
+
 function wireAudio() {
+  $("au-spk-wrap").classList.toggle("hidden", !canPickSpeaker());
+  $("au-mic-dev").addEventListener("change", () => remember("rwr.audio.mic", $("au-mic-dev").value));
+  $("au-spk-dev").addEventListener("change", () => remember("rwr.audio.speaker", $("au-spk-dev").value));
+  fillDevices().catch(() => {});
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => fillDevices().catch(() => {}));
   $("au-start").addEventListener("click", () => (app.audioMode ? stopAudio() : startAudio()));
   $("au-vol").addEventListener("input", () => {
     const v = Number($("au-vol").value);

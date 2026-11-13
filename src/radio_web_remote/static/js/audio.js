@@ -25,7 +25,7 @@ export class BrowserAudio {
 
   get running() { return !!this.ctx; }
 
-  async start({ playback, microphone, processing, volume }) {
+  async start({ playback, microphone, processing, volume, micId, speakerId }) {
     if (!window.isSecureContext || !window.AudioContext) {
       throw new AudioUnavailable("This page is not a secure context. Install the certificate from /setup.");
     }
@@ -38,6 +38,7 @@ export class BrowserAudio {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: {
+            ...(micId ? { deviceId: { exact: micId } } : {}),
             channelCount: 1,
             echoCancellation: !!processing.echoCancellation,
             noiseSuppression: !!processing.noiseSuppression,
@@ -54,6 +55,9 @@ export class BrowserAudio {
     const ctx = new AudioContext({ latencyHint: "interactive" });
     this.ctx = ctx;
     await ctx.resume();
+    if (speakerId && typeof ctx.setSinkId === "function") {
+      await ctx.setSinkId(speakerId).catch(() => {});  // falls back to the system default
+    }
     await ctx.audioWorklet.addModule("/static/js/worklets/player.js");
     await ctx.audioWorklet.addModule("/static/js/worklets/capture.js");
     if (playback) {
@@ -104,4 +108,20 @@ export class BrowserAudio {
     new Int16Array(buf, HEADER).set(samples);
     return buf;
   }
+}
+
+// The radio's own codec must never be the browser's mic or speaker: it would
+// loop receive audio into transmit.
+export function isRadioCodec(label) { return /USB Audio CODEC/i.test(label || ""); }
+
+export async function listDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return { inputs: [], outputs: [] };
+  const all = await navigator.mediaDevices.enumerateDevices();
+  const pick = (kind) => all.filter((d) => d.kind === kind && d.deviceId && d.deviceId !== "default"
+    && d.deviceId !== "communications");
+  return { inputs: pick("audioinput"), outputs: pick("audiooutput") };
+}
+
+export function canPickSpeaker() {
+  return typeof AudioContext !== "undefined" && typeof AudioContext.prototype.setSinkId === "function";
 }
