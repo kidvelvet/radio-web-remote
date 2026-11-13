@@ -2,6 +2,7 @@ import datetime as dt
 import ipaddress
 import os
 import sys
+from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -99,7 +100,7 @@ def test_user_supplied_certificate_is_used_as_is(tmp_path):
         {"server": {"tls": {"cert_file": "/x/c.pem", "key_file": "/x/k.pem"}}}
     )
     files, changed = tls.ensure_certificates(cfg, tmp_path)
-    assert str(files.cert_file) == "/x/c.pem" and files.ca_cert_file is None and changed is None
+    assert files.cert_file == Path("/x/c.pem") and files.ca_cert_file is None and changed is None
     assert not (tmp_path / "tls").exists()
 
 
