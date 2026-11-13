@@ -40,3 +40,27 @@ def test_parse_tx_state():
     for bad in (b"\x1c\x00", b"\x1c\x00\x02", b"\x1c\x01\x00", b"\x1c\x00\x00\x00"):
         with pytest.raises(c.ReplyError):
             c.parse_tx_state(bad)
+
+
+# Frames captured from a real IC-7300 on 2026-11-13 (docs/hardware-test.md,
+# H7300-2 and H7300-6), transceive ON, addressed to 00.
+REAL_IC7300 = [
+    ("FEFE0094010001FD", "mode", (0x00, 0x01)),  # LSB FIL1
+    ("FEFE0094010701FD", "mode", (0x07, 0x01)),  # CW-R FIL1
+    ("FEFE0094010103FD", "mode", (0x01, 0x03)),  # USB FIL3
+    ("FEFE0094001000301400FD", "freq", 14_300_010),  # payload 00 10 00 30 14 00
+    ("FEFE0094000060281400FD", "freq", 14_286_000),  # payload 00 00 60 28 14 00
+    ("FEFE0094003097291400FD", "freq", 14_299_730),  # payload 00 30 97 29 14 00
+]
+
+
+def test_real_ic7300_transceive_frames():
+    from radio_web_remote.protocols.civ.frame import FrameParser
+
+    for raw, kind, expected in REAL_IC7300:
+        (frame,) = FrameParser().feed(bytes.fromhex(raw))
+        assert (frame.to_addr, frame.from_addr) == (0x00, 0x94)
+        if kind == "mode":
+            assert c.parse_mode(frame.payload) == expected
+        else:
+            assert c.parse_frequency(frame.payload) == expected

@@ -44,8 +44,9 @@ from radio_web_remote.transport.base import ByteTransport, Priority
 log = logging.getLogger(__name__)
 
 DEFAULT_CONTROLLER = 0xE0
-# TODO(verify): transceive output is assumed to be addressed to 00 (broadcast)
-# or to the controller. Accept both until confirmed on hardware.
+# Transceive frames are addressed to 00 (broadcast): observed on an IC-7300,
+# 2026-11-13 (docs/hardware-test.md, H7300-6). The controller address is
+# accepted too, in case another model differs.
 BROADCAST = 0x00
 UNKEY_RETRIES = 3
 UNKEY_BUS_WAIT_S = 0.05

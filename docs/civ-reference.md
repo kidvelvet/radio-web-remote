@@ -22,7 +22,7 @@ third-party copy) or confirmed on hardware. Until then the row is a
 | OK reply | `FB` | 7300-FM p. 19-2 | |
 | NG reply | `FA` | 7300-FM p. 19-2 | |
 | Collision/jam | `FC` | not found in 7300-FM | TODO(verify). Parser drops any frame containing FC; no value we encode can contain it. |
-| Transceive destination | `00`? | not found | TODO(verify). Driver accepts 00 or the controller address. |
+| Transceive destination | `00` | observed on IC-7300 hardware, 2026-11-13 (H7300-6) | Not in the manual pages read. Driver also accepts the controller address, in case other models differ. |
 | Command pacing | one command at a time | observed on IC-7300 hardware, 2026-11-13 | Back-to-back commands: only one answered. Reply arrives about 3 ms after the command at 115200. |
 
 ## IC-7300

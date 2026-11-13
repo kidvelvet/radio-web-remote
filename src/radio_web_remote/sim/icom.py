@@ -30,7 +30,7 @@ from radio_web_remote.radios.base import Mode
 from radio_web_remote.radios.icom.model import IcomModel
 from radio_web_remote.transport.loopback import LoopbackEnd
 
-TRANSCEIVE_TO = 0x00  # TODO(verify): see civ_driver.BROADCAST
+TRANSCEIVE_TO = 0x00  # observed on IC-7300 hardware; see civ_driver.BROADCAST
 
 
 @dataclass
