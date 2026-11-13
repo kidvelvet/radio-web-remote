@@ -104,6 +104,28 @@
       <p class="muted small">RF power is the control position, not watts.</p>
     </section>
 
+    <section class="panel" aria-label="Audio">
+      <h2>Audio</h2>
+      <div class="row wrap">
+        <label class="inline">Route <select id="au-mode">
+          <option value="remote">This device (mic and speaker)</option>
+          <option value="monitor">Listen only</option>
+          <option value="host">Radio computer's mic and speaker</option>
+        </select></label>
+        <button type="button" id="au-start" class="primary">Start audio</button>
+      </div>
+      <div class="level"><label for="au-vol">Volume</label><input type="range" id="au-vol" min="0" max="200" value="100"><span id="au-vol-t">100%</span></div>
+      <div class="meter"><label for="au-mic">Mic</label><meter id="au-mic" min="-60" max="0" low="-12" high="-3" optimum="-20" value="-60"></meter><span id="au-mic-t">-</span></div>
+      <details>
+        <summary>Microphone processing (off is best for SSB)</summary>
+        <label class="check"><input type="checkbox" id="au-ec"> Echo cancellation</label>
+        <label class="check"><input type="checkbox" id="au-ns"> Noise suppression</label>
+        <label class="check"><input type="checkbox" id="au-agc"> Automatic gain</label>
+        <p class="muted small">Changes apply the next time you start audio.</p>
+      </details>
+      <p class="muted small" id="au-status">Audio is off. Tap Start audio.</p>
+    </section>
+
     <section class="panel ptt-panel" aria-label="Transmit">
       <button type="button" class="ptt" id="ptt" aria-pressed="false" disabled>PTT</button>
       <div class="row">

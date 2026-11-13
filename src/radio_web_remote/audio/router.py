@@ -15,8 +15,10 @@ once. Other connections may listen at the same time.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import logging
+import time
 from collections.abc import Callable
 from enum import Enum
 
@@ -51,7 +53,7 @@ class AudioRouter:
         self.error: str | None = None if radio else "no radio audio device configured"
         self.running = False
         self.rx_seq = 0
-        self.tx_peak_dbfs = -120.0
+        self._tx_peaks: collections.deque[tuple[float, float]] = collections.deque()
         self._task: asyncio.Task[None] | None = None
         if radio is not None:
             radio.on_rx = self._on_radio_rx
@@ -120,7 +122,7 @@ class AudioRouter:
             return False
         if self._modes.get(session_id) is not AudioMode.REMOTE:
             return False
-        self.tx_peak_dbfs = pcm.peak_dbfs(frame_pcm)
+        self._note_peak(frame_pcm)
         self.radio.write_tx(frame_pcm)
         return True
 
@@ -128,14 +130,29 @@ class AudioRouter:
         holder = self._holder()
         if self.radio is None or holder is None or self._modes.get(holder) is not AudioMode.HOST:
             return
-        self.tx_peak_dbfs = pcm.peak_dbfs(frame_pcm)
+        self._note_peak(frame_pcm)
         self.radio.write_tx(frame_pcm)
+
+    PEAK_HOLD_S = 1.0
+
+    def _note_peak(self, frame_pcm: bytes) -> None:
+        now = time.monotonic()
+        self._tx_peaks.append((now, pcm.peak_dbfs(frame_pcm)))
+        while self._tx_peaks and now - self._tx_peaks[0][0] > self.PEAK_HOLD_S:
+            self._tx_peaks.popleft()
+
+    @property
+    def tx_peak_dbfs(self) -> float:
+        """Peak transmit level over the last second (a peak-hold meter); -120 if none."""
+        now = time.monotonic()
+        recent = [p for t, p in self._tx_peaks if now - t <= self.PEAK_HOLD_S]
+        return max(recent, default=-120.0)
 
     def tx_ended(self) -> None:
         """Called when TX stops: drop any transmit audio still buffered."""
         if self.radio is not None:
             self.radio.clear_tx()
-        self.tx_peak_dbfs = -120.0
+        self._tx_peaks.clear()
 
     # -- receive -----------------------------------------------------------
     def _on_radio_rx(self, frame_pcm: bytes) -> None:

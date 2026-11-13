@@ -4,6 +4,7 @@
 // fast paths only: it releases PTT on pointer up, key up, window blur, page
 // hidden and page hide, and sends heartbeats while connected.
 
+import { AudioUnavailable, BrowserAudio } from "./audio.js";
 import { Scope } from "./scope.js";
 
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,7 @@ const app = {
   heartbeat: null, ptt: false, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
   scope: null, scopeOn: false,
+  audio: null, audioMode: null, rxStats: null, txLevel: null,
 };
 
 // ---------- formatting ----------
@@ -60,12 +62,18 @@ function connect() {
   setLink("connecting");
   ws.onopen = () => { app.retry = 500; setLink("up"); };
   ws.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) { app.scope?.push(ev.data); return; }
+    if (ev.data instanceof ArrayBuffer) {
+      const kind = new Uint8Array(ev.data, 0, 1)[0];
+      if (kind === 1) app.scope?.push(ev.data);
+      else if (kind === 2) app.audio?.playFrame(ev.data);
+      return;
+    }
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === "hello") onHello(msg);
     else if (msg.type === "state") render(msg.state);
     else if (msg.type === "error") onError(msg);
+    else if (msg.type === "tx_level") { app.txLevel = msg.peak_dbfs; if (app.state) renderTx(app.state, app.state); }
   };
   ws.onclose = (ev) => {
     stopHeartbeat();
@@ -91,6 +99,7 @@ function onHello(msg) {
   app.heartbeat = setInterval(() => send({ type: "heartbeat" }), every);
   $("ptt").disabled = !msg.may_transmit;
   if (app.scopeOn) send({ type: "scope", on: true });  // resubscribe after a reconnect
+  if (app.audioMode) send({ type: "audio", mode: app.audioMode });
   if (!msg.may_transmit) $("ptthint").textContent = "Your account can listen but not transmit.";
 }
 function stopHeartbeat() { if (app.heartbeat) clearInterval(app.heartbeat); app.heartbeat = null; }
@@ -148,6 +157,11 @@ function render(s) {
     $(`m-${key}-t`).textContent = meterText(m);
   }
   app.scope?.setMarker(s.frequency_hz);
+  const hostOpt = document.querySelector("#au-mode option[value=host]");
+  if (hostOpt) hostOpt.disabled = !s.audio?.host_mode;
+  if (s.audio && !s.audio.available && app.audioMode) {
+    $("au-status").textContent = `Radio audio is not available: ${s.audio.error || "unknown"}`;
+  }
   renderScopeSettings(s.scope);
   const listener = app.hello && !app.hello.may_transmit && app.hello.user.role === "listener";
   document.querySelectorAll("#scope-controls select, #sc-hold").forEach((el) => { el.disabled = !!listener; });
@@ -164,7 +178,8 @@ function renderTx(s, prev) {
     $("txtext").textContent = "TX OFF NOT CONFIRMED: the radio may still be transmitting. Retrying.";
   } else if (tx.transmitting && mine) {
     bar.dataset.state = tx.keyed ? "tx" : "pending";
-    $("txtext").textContent = tx.keyed ? `ON AIR  ${tx.holder}` : "Keying...";
+    const lvl = app.txLevel != null && app.txLevel > -120 ? `  audio ${Math.round(app.txLevel)} dBFS` : "";
+    $("txtext").textContent = tx.keyed ? `ON AIR  ${tx.holder}${lvl}` : "Keying...";
   } else if (tx.transmitting) {
     bar.dataset.state = "held";
     $("txtext").textContent = `TX held by ${tx.holder}`;
@@ -201,7 +216,11 @@ function localPtt(down) {
 }
 function setPtt(down) {
   if (down === app.ptt) return;
-  if (down) { showMsg(""); requestWakeLock(); }
+  if (down) {
+    showMsg(app.audioMode === "remote" || app.audioMode === "host"
+      ? "" : "No microphone path: start audio with a mic route to transmit voice.");
+    requestWakeLock();
+  }
   localPtt(down);
   send({ type: "ptt", down });
 }
@@ -417,6 +436,88 @@ function wireScope() {
   if (saved) setScope(true);
 }
 
+// ---------- audio ----------
+function audioStatus() {
+  if (!app.audioMode) return "Audio is off. Tap Start audio.";
+  if (app.audioMode === "host") return "Using the radio computer's microphone and speaker.";
+  const st = app.rxStats;
+  const rx = st ? `buffer ${st.bufferedMs} ms, ${st.underruns} gaps` : "waiting for audio";
+  return app.audioMode === "monitor" ? `Listening: ${rx}.` : `Mic and speaker on: ${rx}.`;
+}
+
+function onMicFrame(samples, peak) {
+  const db = peak > 0 ? Math.max(-60, 20 * Math.log10(peak)) : -60;
+  $("au-mic").value = db;
+  $("au-mic-t").textContent = `${Math.round(db)} dB`;
+  // Send microphone audio only while this page holds PTT; the server ignores it otherwise.
+  if (app.ptt && app.audioMode === "remote" && app.ws?.readyState === WebSocket.OPEN) {
+    app.ws.send(app.audio.txFrame(samples));
+  }
+}
+
+async function startAudio() {
+  const mode = $("au-mode").value;
+  const btn = $("au-start");
+  btn.disabled = true;
+  try {
+    if (mode !== "host") {
+      app.audio = new BrowserAudio({
+        onMicFrame,
+        onStats: (st) => { app.rxStats = st; $("au-status").textContent = audioStatus(); },
+      });
+      await app.audio.start({
+        playback: true,
+        microphone: mode === "remote",
+        processing: {
+          echoCancellation: $("au-ec").checked,
+          noiseSuppression: $("au-ns").checked,
+          autoGainControl: $("au-agc").checked,
+        },
+        volume: Number($("au-vol").value) / 100,
+      });
+    }
+    app.audioMode = mode;
+    send({ type: "audio", mode });
+    btn.textContent = "Stop audio";
+    btn.classList.remove("primary");
+    $("au-mode").disabled = true;
+  } catch (e) {
+    await app.audio?.stop();
+    app.audio = null;
+    const text = e instanceof AudioUnavailable ? e.message : `Audio failed: ${e && e.message ? e.message : e}`;
+    $("au-status").textContent = text;
+    showMsg(text);
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  $("au-status").textContent = audioStatus();
+}
+
+async function stopAudio() {
+  setPtt(false);
+  send({ type: "audio", mode: null });
+  app.audioMode = null;
+  await app.audio?.stop();
+  app.audio = null;
+  app.rxStats = null;
+  $("au-start").textContent = "Start audio";
+  $("au-start").classList.add("primary");
+  $("au-mode").disabled = false;
+  $("au-mic").value = -60;
+  $("au-mic-t").textContent = "-";
+  $("au-status").textContent = audioStatus();
+}
+
+function wireAudio() {
+  $("au-start").addEventListener("click", () => (app.audioMode ? stopAudio() : startAudio()));
+  $("au-vol").addEventListener("input", () => {
+    const v = Number($("au-vol").value);
+    $("au-vol-t").textContent = `${v}%`;
+    app.audio?.setVolume(v / 100);
+  });
+}
+
 // ---------- misc ----------
 async function requestWakeLock() {
   try {
@@ -446,6 +547,7 @@ async function boot() {
   wireTuning();
   wireControls();
   wireScope();
+  wireAudio();
   document.addEventListener("pointerdown", requestWakeLock, { once: true });
   connect();
 }

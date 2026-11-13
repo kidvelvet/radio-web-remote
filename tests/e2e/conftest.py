@@ -94,3 +94,23 @@ def server(tmp_path_factory):
 @pytest.fixture
 def browser_context_args(browser_context_args, server):
     return {**browser_context_args, "base_url": server["url"], "ignore_https_errors": True}
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args, browser_name):
+    """Fake microphones: Chromium plays a beep, Firefox a tone. WebKit has no fake mic."""
+    args = dict(browser_type_launch_args)
+    if browser_name == "chromium":
+        args["args"] = [
+            *args.get("args", []),
+            "--use-fake-ui-for-media-stream",
+            "--use-fake-device-for-media-stream",
+            "--autoplay-policy=no-user-gesture-required",
+        ]
+    elif browser_name == "firefox":
+        args["firefox_user_prefs"] = {
+            "media.navigator.streams.fake": True,
+            "media.navigator.permission.disabled": True,
+            "media.autoplay.default": 0,
+        }
+    return args

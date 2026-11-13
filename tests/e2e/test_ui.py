@@ -211,3 +211,46 @@ def test_scope_settings(page: Page, server):
     expect(page.locator(".sc-center")).to_be_hidden()
     page.select_option("#sc-mode", "center")
     page.select_option("#sc-span", "50000")
+
+
+def test_listen_only_audio_plays(page: Page, server):
+    login(page, server)
+    page.select_option("#au-mode", "monitor")
+    page.click("#au-start")
+    expect(page.locator("#au-start")).to_have_text("Stop audio", timeout=10_000)
+    # The player worklet reports its buffer once a second: receive audio is flowing.
+    expect(page.locator("#au-status")).to_have_text(
+        re.compile(r"Listening: buffer \d+ ms"), timeout=10_000
+    )
+    page.click("#au-start")
+    expect(page.locator("#au-start")).to_have_text("Start audio")
+
+
+def test_microphone_to_radio_while_keyed(page: Page, server, browser_name):
+    if browser_name == "webkit":
+        pytest.skip("Playwright WebKit has no fake microphone; covered by the iPhone/iPad pass")
+    login(page, server)
+    page.select_option("#au-mode", "remote")
+    page.click("#au-start")
+    expect(page.locator("#au-start")).to_have_text("Stop audio", timeout=10_000)
+    expect(page.locator("#au-status")).to_have_text(
+        re.compile(r"Mic and speaker on: buffer"), timeout=10_000
+    )
+    page.locator("#ptt").hover()
+    page.mouse.down()
+    # The server reports the level of microphone audio it actually received.
+    expect(page.locator("#txtext")).to_have_text(
+        re.compile(r"ON AIR\s+N0OP\s+audio -?\d+ dBFS"), timeout=8_000
+    )
+    page.mouse.up()
+    expect(page.locator("#txtext")).to_have_text("Receive", timeout=5_000)
+    page.click("#au-start")
+
+
+def test_keying_without_mic_route_warns(page: Page, server):
+    login(page, server)
+    page.check("#toggle")
+    page.click("#ptt")
+    expect(page.locator("#msg")).to_contain_text("No microphone path")
+    page.click("#ptt")
+    expect(page.locator("#txtext")).to_have_text("Receive", timeout=5_000)
