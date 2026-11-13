@@ -2,6 +2,11 @@
 
 Status: proposed, awaiting approval. Architecture is in [adr/0001-architecture.md](adr/0001-architecture.md).
 
+## Status (2026-11-13)
+
+- **P0: done.** CI green on Linux (3.11, 3.12, 3.13), Windows, macOS. IC-7300 hardware checks H7300-1 to -6 pass.
+- **P1: built and tested in simulation; hardware checks pending.** 193 unit and integration tests, 36 browser tests (Chromium, Firefox, WebKit). Open: H7300-7, -8, -10 to -13 on the real radio (docs/hardware-test.md).
+
 ## 0. Decisions recorded (2026-11-13)
 
 - Name: radio-web-remote (Python package `radio_web_remote`). Other makers' radios may be added later, so the core is vendor-neutral.
