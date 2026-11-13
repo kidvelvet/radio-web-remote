@@ -1,0 +1,56 @@
+# radio-web-remote configuration.
+#
+# Copy to config.yaml (next to where you start the server) or to the data
+# folder, then edit. Every key below shows its default; delete any line you
+# do not need to change. Run `radio-web-remote config check` after editing.
+
+project:
+  name: radio-web-remote
+  github_owner: ""                 # used for "check for updates" links later
+  license: MIT
+  # Shown on the /setup page. Informational only.
+  supported_hosts:
+    - Linux (incl. Raspberry Pi OS 64-bit)
+    - Windows 10/11
+    - macOS
+  supported_clients:
+    - Chrome
+    - Edge
+    - Firefox
+    - Safari (macOS)
+    - Safari on iOS/iPadOS
+
+site:
+  club_name: WWT Amateur Radio Club
+
+server:
+  # 0.0.0.0 listens on every interface. To accept connections only over a
+  # VPN, put the host's VPN interface address here instead.
+  bind_address: 0.0.0.0
+  https_port: 8473
+  http_redirect:
+    enabled: false                 # plain HTTP only redirects to HTTPS
+    port: 8080
+  hostnames: []                    # extra DNS names for the certificate
+  vpn_ips: []                      # VPN addresses clients use to reach this host
+
+ptt:
+  heartbeat_interval_s: 0.5        # how often the browser says "still here"
+  heartbeat_timeout_s: 2.0         # unkey if no heartbeat for this long
+  tx_timeout_s: 180                # longest single transmission; max 180, can only be lowered
+
+# One entry per radio cabled to this host. Empty by default.
+radios: []
+# Example:
+# radios:
+#   - id: ic7300
+#     driver: icom.ic7300
+#     match:
+#       usb_serial: null           # preferred: survives moving the cable
+#       usb_location: null         # USB topology path, e.g. "1-1.2"
+#       port: null                 # last resort: COM3 or /dev/ttyUSB0
+#     baud: 115200                 # IC-7300 scope output needs 115200
+#     civ_address: null            # null = driver default; else quoted hex, e.g. "94"
+#     controller_address: "E0"
+#     auto_detect_address: false
+#     ptt_method: civ              # civ, dtr or rts
