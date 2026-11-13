@@ -112,6 +112,15 @@ class IcomSimulator:
         )
 
     # -- command handling --------------------------------------------------
+    def reply_sent(self) -> None:
+        """Runners call this once a reply is on the wire: the radio is free again.
+
+        Busy ends here rather than by the clock, because event-loop timers can
+        fire early on Windows (about 15 ms clock granularity), which would make
+        the simulator drop a command the real radio would answer.
+        """
+        self._busy_until = 0.0
+
     def reported_tx(self, now: float | None = None) -> bool:
         """TX state as the radio would report it: still TX until the release delay passes."""
         if self.state.transmitting:
@@ -172,6 +181,7 @@ def attach_loopback(sim: IcomSimulator, end: LoopbackEnd) -> None:
     def deliver(reply: bytes) -> None:
         # Write directly, not through the queue, like a real UART would.
         peer = end.peer
+        sim.reply_sent()
         if end.is_open and peer is not None and peer.is_open:
             peer._deliver(reply)
 
@@ -243,6 +253,8 @@ class PtyRunner:
                 if reply:
                     time.sleep(self.sim.reply_delay_s)
                     self.inject(reply)
+                    with self._lock:
+                        self.sim.reply_sent()
 
     def stop(self) -> None:
         self._stop.set()
