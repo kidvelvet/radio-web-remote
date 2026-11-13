@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.33"]
+build-backend = "hatchling.build"
+
+[project]
+name = "radio-web-remote"
+version = "0.0.1"
+description = "Self-hosted browser remote control for amateur radio transceivers over USB"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Steve Whitaker" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Ham Radio",
+]
+# Runtime dependencies grow per phase; see THIRD_PARTY_NOTICES.md.
+dependencies = [
+    "pydantic>=2.14,<3",
+    "pyyaml>=6.0.3,<7",
+    "pyserial>=3.5,<4",
+]
+
+[project.scripts]
+radio-web-remote = "radio_web_remote.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2,<10",
+    "pytest-asyncio>=1.5,<2",
+    "hypothesis>=6.170",
+    "ruff>=0.17.5",
+    "mypy>=2.4",
+    "types-pyyaml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/radio_web_remote"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers"
+markers = ["pty: needs a POSIX pseudo-terminal (skipped on Windows)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ASYNC", "S"]
+ignore = ["S101"]  # assert is fine in tests
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["serial", "serial.*"]
+ignore_missing_imports = true
