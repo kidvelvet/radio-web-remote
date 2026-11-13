@@ -109,8 +109,8 @@ class RadioDriver(ABC):
         """Request transmit. Returns False if an unkey overtook the request."""
 
     @abstractmethod
-    async def unkey(self) -> None:
-        """Stop transmitting. Must jump ahead of all queued traffic."""
+    async def unkey(self, verify: bool = True) -> None:
+        """Stop transmitting, ahead of all queued traffic; with verify, confirm RX or raise."""
 
     def add_listener(self, listener: StateListener) -> None:
         self._listeners.append(listener)

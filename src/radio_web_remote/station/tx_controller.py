@@ -29,10 +29,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 
 from radio_web_remote.config import PttConfig
-from radio_web_remote.radios.base import RadioDriver, RadioError
+from radio_web_remote.radios.base import RadioError
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +110,14 @@ class TxStatus:
     last_stop_reason: StopReason | None = None
 
 
+class PttDriver(Protocol):
+    """The two driver calls the controller needs (a RadioDriver, or a station proxy)."""
+
+    async def key(self) -> bool: ...
+
+    async def unkey(self, verify: bool = True) -> None: ...
+
+
 AuditSink = Callable[[dict[str, Any]], None]
 StatusListener = Callable[[TxStatus], None]
 
@@ -118,7 +126,7 @@ class TxController:
     def __init__(
         self,
         radio_id: str,
-        driver: RadioDriver,
+        driver: PttDriver,
         ptt: PttConfig,
         frequency: Callable[[], int | None],
         audit: AuditSink | None = None,
@@ -243,6 +251,10 @@ class TxController:
             self._must_release.discard(session_id)
         if self._holder is not None and self._holder.session_id == session_id:
             await self._stop(reason)
+
+    async def radio_lost(self) -> None:
+        """The radio link dropped. Clear any holder; reconnect sends TX off first."""
+        await self._stop(StopReason.RADIO_ERROR, force=True)
 
     async def frequency_changed(self, hz: int) -> None:
         holder = self._holder
