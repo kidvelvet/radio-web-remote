@@ -60,3 +60,32 @@ jobs:
 
       - name: Tests
         run: uv run pytest -o faulthandler_timeout=60
+
+  e2e:
+    name: browsers (chromium, firefox, webkit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv into .tools
+        shell: bash
+        run: |
+          python -m venv .tools
+          .tools/bin/python -m pip install --quiet uv
+          .tools/bin/python -c "import pathlib, sys; print(pathlib.Path(sys.executable).parent)" >> "$GITHUB_PATH"
+
+      - name: Sync environment (locked)
+        run: uv sync --locked --python 3.12
+
+      - name: Install browser engines
+        run: uv run playwright install --with-deps chromium firefox webkit
+
+      - name: Browser tests
+        run: uv run pytest -m e2e --browser chromium --browser firefox --browser webkit -o faulthandler_timeout=120

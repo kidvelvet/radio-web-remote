@@ -126,6 +126,10 @@ class RadioStation:
         self._driver: RadioDriver | None = None
         self._connected = False
         self._connected_once = False
+        # Per-field write counters. A poll result is applied only if nothing
+        # wrote that field while the poll was in flight; otherwise a stale
+        # reading could overwrite a newer value (seen in browser tests).
+        self._writes: dict[str, int] = {}
         self.state = RadioState(cfg.id)
         self._listeners: list[StateListener] = []
         self._task: asyncio.Task[None] | None = None
@@ -255,13 +259,26 @@ class RadioStation:
             items.append("data_mode")
         return items
 
+    def _bump(self, *fields: str) -> None:
+        for f in fields:
+            self._writes[f] = self._writes.get(f, 0) + 1
+
+    def _unchanged_since(self, field: str, mark: int) -> bool:
+        return self._writes.get(field, 0) == mark
+
     async def _poll_slow(self, driver: RadioDriver, item: Level | str) -> None:
         if item == "data_mode":
+            mark = self._writes.get("data_mode", 0)
             on = await driver.get_data_mode()
-            self._update(data_mode=on)
+            if self._unchanged_since("data_mode", mark):
+                self._update(data_mode=on)
             return
         assert isinstance(item, Level)
+        key = f"level:{item.value}"
+        mark = self._writes.get(key, 0)
         value = await driver.get_level(item)
+        if not self._unchanged_since(key, mark):
+            return
         if self.state.levels.get(item.value) != value:
             self._update(levels={**self.state.levels, item.value: value})
             if item is Level.RF_POWER:
@@ -283,12 +300,16 @@ class RadioStation:
                 self._update(meters=readings)
 
     async def _poll_once(self, driver: RadioDriver) -> None:
+        f_mark, m_mark = self._writes.get("frequency", 0), self._writes.get("mode", 0)
         hz = await driver.get_frequency()
         mode = await driver.get_mode()
-        if hz != self.state.frequency_hz:
+        if self._unchanged_since("frequency", f_mark) and hz != self.state.frequency_hz:
             self._update(frequency_hz=hz)
             await self.tx.frequency_changed(hz)
-        if (mode.mode.value, mode.filter) != (self.state.mode, self.state.filter):
+        if self._unchanged_since("mode", m_mark) and (mode.mode.value, mode.filter) != (
+            self.state.mode,
+            self.state.filter,
+        ):
             self._update(mode=mode.mode.value, filter=mode.filter)
 
     async def _drop_driver(self) -> None:
@@ -301,9 +322,11 @@ class RadioStation:
     # -- radio events ------------------------------------------------------
     def _on_radio_event(self, ev: StateEvent) -> None:
         if ev.kind == "frequency" and isinstance(ev.value, int):
+            self._bump("frequency")
             self._update(frequency_hz=ev.value)
             self._spawn(self.tx.frequency_changed(ev.value))
         elif ev.kind == "mode" and isinstance(ev.value, ModeSetting):
+            self._bump("mode")
             self._update(mode=ev.value.mode.value, filter=ev.value.filter)
 
     def _spawn(self, coro: Any) -> None:
@@ -341,7 +364,9 @@ class RadioStation:
 
     async def set_frequency(self, op: Operator, hz: int) -> None:
         driver = self._require_control(op)
+        self._bump("frequency")
         await driver.set_frequency(hz)
+        self._bump("frequency")
         self._update(frequency_hz=hz)
         await self.tx.frequency_changed(hz)
 
@@ -351,19 +376,25 @@ class RadioStation:
             raise ValueError("level must be 0..255")
         if level is Level.RF_POWER and not op.limits.allows_power(value):
             raise ControlDenied("RF power above your limit")
+        self._bump(f"level:{level.value}")
         await driver.set_level(level, value)
+        self._bump(f"level:{level.value}")
         self._update(levels={**self.state.levels, level.value: value})
         if level is Level.RF_POWER:
             await self.tx.power_changed(value)
 
     async def set_data_mode(self, op: Operator, on: bool) -> None:
         driver = self._require_control(op)
+        self._bump("data_mode")
         await driver.set_data_mode(on, self.state.filter if on else None)
+        self._bump("data_mode")
         self._update(data_mode=on)
 
     async def set_mode(self, op: Operator, setting: ModeSetting) -> None:
         driver = self._require_control(op)
+        self._bump("mode")
         await driver.set_mode(setting)
+        self._bump("mode")
         # Filter omitted means "the mode's default" (p. 19-8); the next poll fills it in.
         self._update(mode=setting.mode.value, filter=setting.filter)
 

@@ -417,3 +417,9 @@ def test_ws_levels_and_data_mode(env):
             ws.send_json(bad)
             assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"
     assert env["sim"].state.levels[0x01] == 77 and env["sim"].state.data_mode
+
+
+def test_successful_logins_do_not_count_toward_rate_limit(env):
+    c = env["client"]
+    for _ in range(15):
+        assert login(c).status_code == 200

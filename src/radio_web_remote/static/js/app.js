@@ -90,6 +90,11 @@ function onHello(msg) {
 function stopHeartbeat() { if (app.heartbeat) clearInterval(app.heartbeat); app.heartbeat = null; }
 
 function onError(msg) {
+  // A refused or failed change: drop our optimistic display and show the radio's real state.
+  if (["control_denied", "radio", "bad_request"].includes(msg.code) && app.pendingHz != null) {
+    app.pendingHz = null;
+    if (app.state) render(app.state);
+  }
   if (["held_by_other", "not_permitted", "out_of_limits", "release_first", "radio_error"].includes(msg.code)) {
     localPtt(false);
   }
@@ -112,6 +117,8 @@ function render(s) {
     el.classList.toggle("hidden", !feats.has(el.dataset.feature));
   });
 
+  // The radio has caught up with what we asked for: show its state again.
+  if (app.pendingHz != null && !app.dragging && s.frequency_hz === app.pendingHz) app.pendingHz = null;
   if (!app.dragging && app.pendingHz == null) {
     $("freqtext").textContent = fmtHz(s.frequency_hz);
     $("freq").setAttribute("aria-valuetext", `${fmtHz(s.frequency_hz)} megahertz`);
@@ -196,10 +203,11 @@ function wirePtt() {
     btn.setPointerCapture(ev.pointerId);
     setPtt(true);
   });
+  // Release on pointer up anywhere (capture can be lost or never granted on
+  // some engines), and always on pointer cancel.
   const release = () => { if (!toggle.checked) setPtt(false); };
-  btn.addEventListener("pointerup", release);
+  window.addEventListener("pointerup", release);
   btn.addEventListener("pointercancel", () => setPtt(false));
-  btn.addEventListener("lostpointercapture", release);
   btn.addEventListener("contextmenu", (ev) => ev.preventDefault());
   toggle.addEventListener("change", () => {
     setPtt(false);
@@ -241,9 +249,19 @@ function flushTune() {
   app.lastSent = performance.now();
   send({ type: "set_frequency", hz: app.pendingHz });
   const sent = app.pendingHz;
-  setTimeout(() => { if (app.pendingHz === sent && !app.dragging) app.pendingHz = null; }, 400);
+  setTimeout(() => {
+    if (app.pendingHz === sent && !app.dragging) { app.pendingHz = null; if (app.state) render(app.state); }
+  }, 1500);
 }
 function current() { return app.pendingHz ?? app.state?.frequency_hz ?? 0; }
+
+// Jump straight to a frequency (direct entry, band button).
+function jumpTo(hz) {
+  app.pendingHz = hz;
+  $("freqtext").textContent = fmtHz(hz);
+  send({ type: "set_frequency", hz });
+  setTimeout(() => { if (app.pendingHz === hz) { app.pendingHz = null; if (app.state) render(app.state); } }, 1500);
+}
 
 function wireTuning() {
   const f = $("freq");
@@ -298,9 +316,7 @@ function wireTuning() {
     ev.preventDefault();
     const v = parseFloat($("entry").value.replace(",", "."));
     if (!Number.isFinite(v) || v <= 0) return;
-    const hz = Math.round(v < 1000 ? v * 1e6 : v * 1e3);  // MHz, or kHz if 1000 or more
-    app.pendingHz = hz;
-    send({ type: "set_frequency", hz });
+    jumpTo(Math.round(v < 1000 ? v * 1e6 : v * 1e3));  // MHz, or kHz if 1000 or more
     $("entry").value = "";
     $("entry").blur();
   });
@@ -309,7 +325,7 @@ function wireTuning() {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = `${name}m`;
-    b.addEventListener("click", () => { app.pendingHz = hz; send({ type: "set_frequency", hz }); });
+    b.addEventListener("click", () => jumpTo(hz));
     bands.append(b);
   }
 }

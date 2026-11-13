@@ -40,6 +40,8 @@ dev = [
     "mypy>=2.4",
     "types-pyyaml",
     "httpx>=0.28.1,<0.29",
+    "playwright>=1.65.1,<2",
+    "pytest-playwright>=0.10,<0.11",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -49,8 +51,11 @@ packages = ["src/radio_web_remote"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-ra --strict-markers"
-markers = ["pty: needs a POSIX pseudo-terminal (skipped on Windows)"]
+addopts = "-ra --strict-markers -m 'not e2e'"
+markers = [
+    "pty: needs a POSIX pseudo-terminal (skipped on Windows)",
+    "e2e: browser tests; run with -m e2e (needs `playwright install`)",
+]
 
 [tool.ruff]
 line-length = 100

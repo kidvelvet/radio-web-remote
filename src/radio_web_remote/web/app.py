@@ -199,8 +199,10 @@ def create_app(
         ip = _client_ip(request)
         if not require_csrf(request, request.cookies.get(LOGIN_CSRF_COOKIE)):
             return JSONResponse({"error": "csrf"}, 403)
-        if not ctx.login_limiter.allow(ip):
-            retry = ctx.login_limiter.retry_after(ip)
+        # Only failed attempts count toward the per-address limit, so members
+        # signing in from several devices are never throttled.
+        retry = ctx.login_limiter.retry_after(ip)
+        if retry > 0:
             audit_event("login_rate_limited", ip=ip)
             return JSONResponse(
                 {"error": "too many attempts"}, 429, headers={"Retry-After": str(retry)}
@@ -214,9 +216,11 @@ def create_app(
         try:
             user = await asyncio.to_thread(users.verify_login, username, password)
         except LockedOut as exc:
+            ctx.login_limiter.allow(ip)
             audit_event("login_locked", user=username.lower(), ip=ip)
             return JSONResponse({"error": "locked", "retry_after": exc.seconds_left}, 423)
         except LoginFailed:
+            ctx.login_limiter.allow(ip)
             audit_event("login_failed", user=username.lower(), ip=ip)
             return JSONResponse({"error": "wrong username or password"}, 401)
         token, sess = await asyncio.to_thread(users.create_session, user, ip)

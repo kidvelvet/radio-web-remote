@@ -65,3 +65,19 @@ button.small { min-height: 36px; padding: 0 10px; font-size: .9rem; background: 
 .ptt:disabled { border-color: var(--line); color: var(--muted); }
 label.check { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ink); min-height: var(--tap); }
 label.check input { width: 22px; height: 22px; }
+
+/* Phones: keep PTT within thumb reach, and give direct entry its own row. */
+@media (max-width: 759px) {
+  .tune #direct { flex-basis: 100%; }
+  .ptt-panel {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    gap: 6px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    border-radius: var(--radius) var(--radius) 0 0;
+    box-shadow: 0 -6px 18px rgba(0, 0, 0, .18);
+  }
+  .ptt { min-height: 84px; }
+  #ptthint { display: none; }
+}

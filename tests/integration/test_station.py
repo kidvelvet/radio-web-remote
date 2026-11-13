@@ -203,3 +203,17 @@ async def test_power_limit(bench):
     bench.sim.state.levels[0x0A] = 230
     await wait_for(lambda: not bench.sim.reported_tx(), timeout=3.0)
     assert bench.station.state.tx.last_stop_reason.value == "out_of_limits"
+
+
+async def test_stale_poll_does_not_overwrite_newer_write(bench):
+    # Regression (browser tests, 2026-11-13): a poll read the old frequency,
+    # a tune landed, then the poll wrote its stale value back over it.
+    st = bench.station
+    driver = st._live_driver()
+    bench.sim.reply_delay_s = 0.03  # widen the window
+    poll = asyncio.create_task(st._poll_once(driver))
+    await asyncio.sleep(0.005)  # the poll's frequency read is in flight
+    await st.set_frequency(ALICE, 21_074_000)
+    await poll
+    bench.sim.reply_delay_s = 0.003
+    assert st.state.frequency_hz == 21_074_000
