@@ -84,3 +84,17 @@ label.check input { width: 22px; height: 22px; }
   .ptt { min-height: 84px; }
   #ptthint { display: none; }
 }
+
+/* Scope */
+.scope-panel { --scope-grid: rgba(127,140,160,.25); --scope-fill: rgba(91,155,255,.30); --scope-line: #5b9bff; --scope-marker: #ff5252; }
+.scope-panel h2 { margin: 0; }
+.spectrum, .waterfall { display: block; width: 100%; background: #040818; touch-action: pan-y; cursor: crosshair; }
+.spectrum { height: 120px; border-radius: 10px 10px 0 0; margin-top: 10px; }
+.waterfall { height: 220px; border-radius: 0 0 10px 10px; }
+@media (min-width: 760px) { .spectrum { height: 150px; } .waterfall { height: 300px; } }
+.scale { margin-top: 8px; }
+.scale label { margin: 0; }
+.scale input[type=range] { flex: 1; min-width: 100px; accent-color: var(--accent); }
+.scope-controls { margin-top: 8px; gap: 10px; }
+.scope-controls label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ink); }
+.scope-controls select { min-height: 40px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; padding: 0 6px; }

@@ -442,3 +442,39 @@ def test_clients_warned_while_tx_off_unconfirmed(env):
         recv_until(ws, lambda m: tx_state(m) and not m["state"]["tx"]["unconfirmed"], limit=800)
     events = [json.loads(x)["event"] for x in (env["tmp"] / "audit.log").read_text().splitlines()]
     assert "tx_off_unconfirmed" in events and "tx_off_confirmed" in events
+
+
+def test_ws_scope_subscription_and_settings(env):
+    from radio_web_remote.web.scope_wire import decode_scope_line
+
+    env["sim"].scope_interval_s = 0.05
+    c = env["client"]
+    lee, alice = login_as(c, "lee"), login_as(c, "alice")
+    with wsc(c, cookies=lee) as ws:  # listeners may watch the scope
+        ws.receive_json()
+        ws.send_json({"type": "scope", "on": True})
+        for _ in range(400):
+            msg = ws.receive()
+            if msg.get("bytes"):
+                break
+        line = decode_scope_line(msg["bytes"])
+        assert len(line.points) == 475 and line.max_value == 160
+        assert env["sim"].state.scope_output
+        ws.send_json({"type": "set_scope", "setting": "span", "value": 25_000})
+        assert recv_until(ws, lambda m: m.get("type") == "error")["code"] == "control_denied"
+    # Last viewer gone: scope data output is turned off again.
+    deadline = time.monotonic() + 2
+    while env["sim"].state.scope_output and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not env["sim"].state.scope_output
+    with wsc(c, cookies=alice) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "set_scope", "setting": "span", "value": 25_000})
+        recv_until(
+            ws, lambda m: m.get("type") == "state" and m["state"]["scope"].get("span") == 25_000
+        )
+        ws.send_json({"type": "set_scope", "setting": "span", "value": 12_345})
+        assert recv_until(ws, lambda m: m.get("type") == "error")["code"] in (
+            "bad_request",
+            "radio",
+        )

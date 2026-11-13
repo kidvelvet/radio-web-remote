@@ -23,10 +23,11 @@ import time
 from dataclasses import dataclass, field
 
 from radio_web_remote.protocols.civ import commands as cmd
+from radio_web_remote.protocols.civ import scope as scope_civ
 from radio_web_remote.protocols.civ.bcd import BcdError, decode_frequency, encode_frequency
 from radio_web_remote.protocols.civ.commands import CivCommand
 from radio_web_remote.protocols.civ.frame import NG, OK, Frame, FrameParser, encode_frame
-from radio_web_remote.radios.base import Mode
+from radio_web_remote.radios.base import Mode, ScopeLine
 from radio_web_remote.radios.icom.model import LEVEL_COMMANDS, METER_COMMANDS, IcomModel
 from radio_web_remote.transport.loopback import LoopbackEnd
 
@@ -44,6 +45,15 @@ class SimState:
         default_factory=lambda: {0x01: 128, 0x02: 255, 0x03: 0, 0x0A: 128}  # AF RF SQL PWR
     )
     s_meter: int = 60
+    scope_on: bool = True  # the radio's own scope display
+    scope_output: bool = False  # 27 11
+    scope_mode: int = 0x00
+    scope_span: int = 50_000
+    scope_edge: int = 1
+    scope_hold: bool = False
+    scope_ref: bytes = b"\x00\x00\x00"
+    scope_speed: int = 0
+    fixed_edges: tuple[int, int] = (14_000_000, 14_350_000)
     tx_meters: dict[int, int] = field(
         default_factory=lambda: {0x11: 150, 0x12: 30, 0x13: 40}  # Po SWR ALC while keyed
     )
@@ -61,6 +71,7 @@ class IcomSimulator:
     # goes unanswered. Runners deliver replies after reply_delay_s.
     reply_delay_s: float = 0.003
     drop_while_busy: bool = True
+    scope_interval_s: float = 0.25  # hardware: about 4 sweeps per second (H7300-14)
     # Also observed (H7300-4): after TX off is acknowledged the radio keeps
     # reporting TX for roughly 15 to 65 ms.
     tx_release_s: float = 0.04
@@ -129,6 +140,50 @@ class IcomSimulator:
         """
         self._busy_until = 0.0
 
+    def _handle_scope(self, p: bytes) -> bytes:
+        """27 xx. Settings need the 00 selector; a bare read gets NG, as on hardware."""
+        st = self.state
+        ok, ng = bytes([OK]), bytes([NG])
+        sub, data = p[1:2], p[2:]
+        if sub in (b"\x10", b"\x11"):
+            attr = "scope_on" if sub == b"\x10" else "scope_output"
+            if not data:
+                return p + (b"\x01" if getattr(st, attr) else b"\x00")
+            if data in (b"\x00", b"\x01"):
+                setattr(st, attr, data == b"\x01")
+                if attr == "scope_output" and st.scope_output:
+                    st.scope_on = True
+                return ok
+            return ng
+        if not data or data[0] != 0x00:
+            return ng
+        arg = data[1:]
+        simple = {b"\x14": "scope_mode", b"\x16": "scope_edge", b"\x1a": "scope_speed"}
+        if sub in simple:
+            if not arg:
+                return p + bytes([getattr(st, simple[sub])])
+            setattr(st, simple[sub], arg[0])
+            return ok
+        if sub == b"\x17":
+            if not arg:
+                return p + (b"\x01" if st.scope_hold else b"\x00")
+            st.scope_hold = arg[0] == 1
+            return ok
+        if sub == b"\x15":
+            if not arg:
+                return p + scope_civ.encode_span(st.scope_span)
+            try:
+                st.scope_span = scope_civ.decode_span(arg)
+            except BcdError:
+                return ng
+            return ok if st.scope_span in scope_civ.SPANS_HZ else ng
+        if sub == b"\x19":
+            if not arg:
+                return p + st.scope_ref
+            st.scope_ref = bytes(arg)
+            return ok
+        return ng
+
     def reported_tx(self, now: float | None = None) -> bool:
         """TX state as the radio would report it: still TX until the release delay passes."""
         if self.state.transmitting:
@@ -140,6 +195,9 @@ class IcomSimulator:
         p = frame.payload
         m = self.model
         ok, ng = bytes([OK]), bytes([NG])
+
+        if p[:1] == b"\x27" and m.scope is not None:
+            return self._handle_scope(p)
 
         level_cmds = {c.prefix: c for c in LEVEL_COMMANDS.values() if m.supports(c)}
         meter_cmds = {c.prefix: c for c in METER_COMMANDS.values() if m.supports(c)}
@@ -213,6 +271,57 @@ class IcomSimulator:
         return ng
 
 
+_SIGNALS_HZ = (
+    1_840_000,
+    3_573_000,
+    7_074_000,
+    7_200_000,
+    10_136_000,
+    14_074_000,
+    14_230_000,
+    14_285_000,
+    18_100_000,
+    21_074_000,
+    24_915_000,
+    28_074_000,
+    50_313_000,
+)  # fixed test carriers so the waterfall has something to show
+
+
+def _scope_line(sim: IcomSimulator, now: float) -> ScopeLine:
+    st, spec = sim.state, sim.model.scope
+    assert spec is not None
+    if st.scope_mode == scope_civ.MODE_CENTER:
+        low, high = st.frequency_hz - st.scope_span, st.frequency_hz + st.scope_span
+    else:
+        low, high = st.fixed_edges
+    n = spec.points
+    step = (high - low) / (n - 1)
+    seed = int(now * 4) * 7919
+    pts = bytearray()
+    for i in range(n):
+        f = low + i * step
+        seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+        v = 12 + (seed >> 16) % 14
+        for s in _SIGNALS_HZ:
+            d = abs(f - s)
+            if d < 1500:
+                v = max(v, int(110 - d / 20))
+        if sim.reported_tx(now) and abs(f - st.frequency_hz) < 1200:
+            v = 155
+        pts.append(min(v, spec.max_value))
+    return ScopeLine(int(low), int(high), bytes(pts), spec.max_value, st.scope_mode != 0)
+
+
+def scope_sweep_bytes(sim: IcomSimulator, now: float | None = None) -> bytes:
+    """One sweep as the radio sends it: 11 frames addressed to the controller."""
+    now = time.monotonic() if now is None else now
+    st = sim.state
+    line = _scope_line(sim, now)
+    payloads = scope_civ.sweep_frames(line, st.scope_mode, st.frequency_hz, st.scope_span)
+    return b"".join(encode_frame(0xE0, sim.addr, p) for p in payloads)
+
+
 def attach_loopback(sim: IcomSimulator, end: LoopbackEnd) -> None:
     """Make the simulator answer on one end of a loopback pair (end must be opened)."""
 
@@ -223,10 +332,25 @@ def attach_loopback(sim: IcomSimulator, end: LoopbackEnd) -> None:
         if end.is_open and peer is not None and peer.is_open:
             peer._deliver(reply)
 
+    ticking = False
+
+    def tick() -> None:
+        nonlocal ticking
+        peer = end.peer
+        if not (sim.state.scope_output and end.is_open and peer is not None and peer.is_open):
+            ticking = False
+            return
+        peer._deliver(scope_sweep_bytes(sim))
+        asyncio.get_running_loop().call_later(sim.scope_interval_s, tick)
+
     def on_data(data: bytes) -> None:
+        nonlocal ticking
         reply = sim.handle_bytes(data, time.monotonic())
         if reply:
             asyncio.get_running_loop().call_later(sim.reply_delay_s, deliver, reply)
+        if sim.state.scope_output and not ticking:
+            ticking = True
+            asyncio.get_running_loop().call_later(sim.scope_interval_s, tick)
 
     end.on_data = on_data
 
@@ -287,7 +411,13 @@ class PtyRunner:
     def _run(self) -> None:
         import select
 
+        next_sweep = time.monotonic()
         while not self._stop.is_set():
+            if self.sim.state.scope_output and time.monotonic() >= next_sweep:
+                with self._lock:
+                    sweep = scope_sweep_bytes(self.sim)
+                self.inject(sweep)
+                next_sweep = time.monotonic() + self.sim.scope_interval_s
             ready, _, _ = select.select([self._master], [], [], 0.05)
             if not ready:
                 continue

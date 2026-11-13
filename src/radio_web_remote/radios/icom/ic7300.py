@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from radio_web_remote.protocols.civ.commands import CivCommand
 from radio_web_remote.radios.base import Meter, Mode
-from radio_web_remote.radios.icom.model import IcomModel, MeterCal, Sourced
+from radio_web_remote.radios.icom.model import IcomModel, MeterCal, ScopeSpec, Sourced
 from radio_web_remote.sources import IC7300_FULL_MANUAL, Source
 
 
@@ -41,6 +41,17 @@ IC7300 = IcomModel(
         CivCommand.SWR_METER: _src("19-3", "15 12 SWR meter level, read"),
         CivCommand.ALC_METER: _src("19-3", "15 13 ALC meter level, read"),
         CivCommand.DATA_MODE: _src("19-6, 19-9", "1A 06 DATA mode: 00/01 then filter 01-03"),
+        CivCommand.SCOPE_DATA: _src("19-7, 19-12", "27 00 waveform data, 11 divisions over USB"),
+        CivCommand.SCOPE_ON: _src("19-7", "27 10 scope ON/OFF, 00/01"),
+        CivCommand.SCOPE_OUTPUT: _src(
+            "19-7", "27 11 scope data output, 00/01 (needs Unlink, 115200)"
+        ),
+        CivCommand.SCOPE_MODE: _src("19-7, 19-12", "27 14 00 + 00 Center / 01 Fixed"),
+        CivCommand.SCOPE_SPAN: _src("19-7, 19-12", "27 15 00 + 5-byte BCD span, 2.5k to 500k"),
+        CivCommand.SCOPE_EDGE: _src("19-7, 19-12", "27 16 00 + edge 01-03"),
+        CivCommand.SCOPE_HOLD: _src("19-7, 19-12", "27 17 00 + 00 OFF / 01 ON"),
+        CivCommand.SCOPE_REF: _src("19-7, 19-12", "27 19 00 + level, -20 to +20 dB, 0.5 dB steps"),
+        CivCommand.SCOPE_SPEED: _src("19-7, 19-13", "27 1A 00 + 00 FAST / 01 MID / 02 SLOW"),
     },
     modes={
         Mode.LSB: Sourced(0x00, _MODE_SRC),
@@ -74,6 +85,9 @@ IC7300 = IcomModel(
         ),
         Meter.ALC: MeterCal(((0, 0.0), (120, 100.0)), "%", _src("19-3", "0000=Min. to 0120=Max.")),
     },
+    scope=ScopeSpec(
+        points=475, max_value=160, source=_src("19-12", "data range 0~160, length 475")
+    ),
     # p. 19-8: the 100 MHz and 1000 MHz digits are fixed at 0 on the IC-7300.
     max_encodable_hz=99_999_999,
 )

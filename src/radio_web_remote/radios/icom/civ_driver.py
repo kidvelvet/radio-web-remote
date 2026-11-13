@@ -24,9 +24,11 @@ import asyncio
 import contextlib
 import itertools
 import logging
+from typing import Any, ClassVar
 
 from radio_web_remote.asyncutil import PriorityLock
 from radio_web_remote.protocols.civ import commands as cmd
+from radio_web_remote.protocols.civ import scope as sc
 from radio_web_remote.protocols.civ.commands import CivCommand, ReplyError
 from radio_web_remote.protocols.civ.frame import Frame, FrameParser, encode_frame
 from radio_web_remote.radios.base import (
@@ -99,6 +101,8 @@ class IcomCivDriver(RadioDriver):
         self._bus = PriorityLock()
         self._pending: _Pending | None = None
         self._ptt_generation = 0
+        spec = model.scope
+        self.scope = sc.ScopeAssembler(spec.points, spec.max_value) if spec else None
 
     # -- RadioDriver properties ----------------------------------------
     @property
@@ -156,6 +160,16 @@ class IcomCivDriver(RadioDriver):
         self._unsolicited(frame)
 
     def _unsolicited(self, frame: Frame) -> None:
+        if frame.payload.startswith(sc.SCOPE_DATA):
+            if self.scope is not None:
+                try:
+                    line = self.scope.feed(frame.payload)
+                except (ReplyError, ValueError) as exc:
+                    log.debug("bad scope frame: %s", exc)
+                    return
+                if line is not None:
+                    self._emit(StateEvent("scope", line))
+            return
         try:
             if frame.cmd == CivCommand.TRANSCEIVE_FREQUENCY.value[0]:
                 self._emit(StateEvent("frequency", cmd.parse_frequency(frame.payload)))
@@ -271,6 +285,70 @@ class IcomCivDriver(RadioDriver):
                 raise Unsupported(f"{self.model.name} table has no filter {filter}")
             code = entry.value
         await self._transact(CivCommand.DATA_MODE, cmd.set_data_mode(on, code), False)
+
+    # -- scope -----------------------------------------------------------
+    _SCOPE_SETTINGS: ClassVar[dict[str, CivCommand]] = {
+        "mode": CivCommand.SCOPE_MODE,
+        "span": CivCommand.SCOPE_SPAN,
+        "edge": CivCommand.SCOPE_EDGE,
+        "hold": CivCommand.SCOPE_HOLD,
+        "ref": CivCommand.SCOPE_REF,
+        "speed": CivCommand.SCOPE_SPEED,
+    }
+
+    async def set_scope_output(self, on: bool) -> None:
+        self._require(CivCommand.SCOPE_OUTPUT)
+        if on:
+            reply = await self._transact(CivCommand.SCOPE_ON, CivCommand.SCOPE_ON.prefix, True)
+            if reply.payload[-1:] != b"\x01":  # the radio's own scope must be on (p. 19-7)
+                await self._transact(
+                    CivCommand.SCOPE_ON, CivCommand.SCOPE_ON.prefix + b"\x01", False
+                )
+        flag = b"\x01" if on else b"\x00"
+        await self._transact(CivCommand.SCOPE_OUTPUT, CivCommand.SCOPE_OUTPUT.prefix + flag, False)
+
+    def scope_settings_supported(self) -> list[str]:
+        return [k for k, c in self._SCOPE_SETTINGS.items() if self.model.supports(c)]
+
+    async def get_scope_setting(self, name: str) -> Any:
+        command = self._SCOPE_SETTINGS[name]
+        reply = await self._transact(command, command.prefix + b"\x00", True, Priority.POLL)
+        data = reply.payload[len(command.prefix) + 1 :]  # after the 00 selector
+        if name == "span":
+            return sc.decode_span(data)
+        if name == "ref":
+            return sc.decode_ref_level(data)
+        if not data:
+            raise ReplyError(f"empty {name} reply")
+        value = data[0]
+        if name == "mode":
+            return {0: "center", 1: "fixed"}.get(value, f"mode {value:02X} (not in manual)")
+        if name == "speed":
+            return sc.SPEEDS[value] if value < len(sc.SPEEDS) else f"speed {value:02X}"
+        if name == "hold":
+            return value == 1
+        return value  # edge number
+
+    async def set_scope_setting(self, name: str, value: Any) -> None:
+        command = self._SCOPE_SETTINGS[name]
+        self._require(command)
+        if name == "mode":
+            data = bytes([{"center": 0, "fixed": 1}[value]])
+        elif name == "span":
+            data = sc.encode_span(int(value))
+        elif name == "edge":
+            if value not in (1, 2, 3):
+                raise ValueError("edge must be 1, 2 or 3")
+            data = bytes([value])
+        elif name == "hold":
+            data = b"\x01" if value else b"\x00"
+        elif name == "ref":
+            data = sc.encode_ref_level(float(value))
+        elif name == "speed":
+            data = bytes([sc.SPEEDS.index(value)])
+        else:
+            raise ValueError(f"unknown scope setting {name!r}")
+        await self._transact(command, command.prefix + b"\x00" + data, False)
 
     # -- PTT -------------------------------------------------------------
     async def get_ptt(self) -> bool:

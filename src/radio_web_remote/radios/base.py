@@ -40,6 +40,7 @@ class Feature(Enum):
     METER_PO = "meter_po"
     METER_SWR = "meter_swr"
     METER_ALC = "meter_alc"
+    SCOPE = "scope"
 
 
 class Level(Enum):
@@ -75,10 +76,26 @@ class ModeSetting:
 
 @dataclass(frozen=True, slots=True)
 class StateEvent:
-    """A change reported by the radio itself (front panel, transceive)."""
+    """A change reported by the radio itself (front panel, transceive, scope)."""
 
-    kind: str  # "frequency" | "mode" | "ptt"
+    kind: str  # "frequency" | "mode" | "ptt" | "scope"
     value: object
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeLine:
+    """One complete sweep of the radio's spectrum scope, vendor-neutral.
+
+    points[i] is the level at low_hz + i * (high_hz - low_hz) / (len(points) - 1),
+    from 0 up to max_value (the radio's own scale, e.g. 0..160 on the IC-7300).
+    """
+
+    low_hz: int
+    high_hz: int
+    points: bytes
+    max_value: int
+    fixed_mode: bool = False  # False: centered on the operating frequency
+    out_of_range: bool = False
 
 
 StateListener = Callable[[StateEvent], None]
@@ -158,6 +175,19 @@ class RadioDriver(ABC):
 
     async def get_data_mode(self) -> bool:
         raise Unsupported(f"{self.model_name} has no documented DATA mode")
+
+    async def set_scope_output(self, on: bool) -> None:
+        """Turn the scope and its data output on or off; lines arrive as StateEvent("scope")."""
+        raise Unsupported(f"{self.model_name} has no documented scope output")
+
+    def scope_settings_supported(self) -> list[str]:
+        return []
+
+    async def get_scope_setting(self, name: str) -> object:
+        raise Unsupported(f"{self.model_name} has no documented scope setting {name}")
+
+    async def set_scope_setting(self, name: str, value: object) -> None:
+        raise Unsupported(f"{self.model_name} has no documented scope setting {name}")
 
     async def set_data_mode(self, on: bool, filter: int | None = None) -> None:
         raise Unsupported(f"{self.model_name} has no documented DATA mode")

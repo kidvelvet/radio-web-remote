@@ -159,3 +159,55 @@ def test_mobile_layout_screenshot(page: Page, server, browser_name, tmp_path_fac
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
     out = server["dir"] / f"mobile-{browser_name}.png"
     page.screenshot(path=str(out), full_page=True)
+
+
+def _scope_on(page: Page):
+    page.locator("#scope-toggle").click()
+    expect(page.locator("#scope-toggle")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#scope-edges")).to_have_text(
+        re.compile(r"\d+\.\d{3} - \d+\.\d{3} MHz"), timeout=10_000
+    )
+
+
+def test_scope_draws_and_click_tunes(page: Page, server):
+    csp = collect_csp_errors(page)
+    login(page, server)
+    page.click("#bands button:has-text('20m')")
+    expect(page.locator("#freqtext")).to_have_text("14.200.000")
+    _scope_on(page)
+    page.select_option("#sc-mode", "center")
+    page.select_option("#sc-span", "50000")
+    expect(page.locator("#scope-edges")).to_have_text(
+        re.compile(r"14\.150 - 14\.250 MHz"), timeout=10_000
+    )
+    # The waterfall has real pixels (not just the background colour).
+    page.wait_for_timeout(1500)
+    lit = page.evaluate("""() => {
+      const c = document.getElementById('waterfall');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, 4).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 60) n++;
+      return n;
+    }""")
+    assert lit > 0
+    # Tap three quarters of the way across: 14.150 + 0.75 * 0.100 MHz = 14.225 MHz.
+    page.select_option("#step", "1000")
+    box = page.locator("#spectrum").bounding_box()
+    page.mouse.click(box["x"] + box["width"] * 0.75, box["y"] + box["height"] / 2)
+    expect(page.locator("#freqtext")).to_have_text("14.225.000", timeout=5_000)
+    assert csp == [], csp
+
+
+def test_scope_settings(page: Page, server):
+    login(page, server)
+    _scope_on(page)
+    page.select_option("#sc-mode", "center")
+    page.select_option("#sc-span", "10000")
+    expect(page.locator("#scope-edges")).to_have_text(re.compile(r"(\d+\.\d{3}) - "), timeout=5_000)
+    page.wait_for_timeout(800)
+    low, high = re.findall(r"(\d+\.\d{3})", page.locator("#scope-edges").inner_text())[:2]
+    assert round(float(high) - float(low), 3) == 0.02  # +/-10 kHz
+    page.select_option("#sc-mode", "fixed")
+    expect(page.locator(".sc-fixed")).to_be_visible()
+    expect(page.locator(".sc-center")).to_be_hidden()
+    page.select_option("#sc-mode", "center")
+    page.select_option("#sc-span", "50000")

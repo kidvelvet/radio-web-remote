@@ -31,6 +31,7 @@ from radio_web_remote.radios.base import (
     RadioDriver,
     RadioError,
     RadioTimeout,
+    ScopeLine,
     StateEvent,
 )
 from radio_web_remote.station.tx_controller import (
@@ -47,6 +48,7 @@ log = logging.getLogger(__name__)
 
 TransportFactory = Callable[[], ByteTransport]
 StateListener = Callable[["RadioState"], None]
+ScopeListener = Callable[[ScopeLine], None]
 
 
 class ControlDenied(PermissionError):
@@ -71,6 +73,7 @@ class RadioState:
     data_mode: bool | None = None
     levels: dict[str, int] = field(default_factory=dict)  # "af" -> 0..255
     meters: dict[str, dict[str, Any]] = field(default_factory=dict)
+    scope: dict[str, Any] = field(default_factory=dict)  # mode, span, edge, hold, ref, speed
     tx: TxStatus = field(default_factory=lambda: TxStatus(False))
 
     def to_json(self) -> dict[str, Any]:
@@ -133,6 +136,8 @@ class RadioStation:
         self._writes: dict[str, int] = {}
         self.state = RadioState(cfg.id)
         self._listeners: list[StateListener] = []
+        self._scope_listeners: list[ScopeListener] = []
+        self._scope_wanted = False
         self._task: asyncio.Task[None] | None = None
         self._bg: set[asyncio.Task[None]] = set()
         self.tx = TxController(
@@ -222,6 +227,8 @@ class RadioStation:
             features=tuple(sorted(f.value for f in driver.features)),
             modes=tuple(m.value for m in driver.modes),
         )
+        if self._scope_wanted and Feature.SCOPE in driver.features:
+            await driver.set_scope_output(True)  # re-apply after a reconnect
         slow = self._slow_items(driver)
         for item in slow:  # read everything once up front
             await self._poll_slow(driver, item)
@@ -258,6 +265,8 @@ class RadioStation:
         ]
         if Feature.DATA_MODE in driver.features:
             items.append("data_mode")
+        if Feature.SCOPE in driver.features:
+            items += [f"scope:{name}" for name in driver.scope_settings_supported()]
         return items
 
     def _bump(self, *fields: str) -> None:
@@ -268,6 +277,13 @@ class RadioStation:
         return self._writes.get(field, 0) == mark
 
     async def _poll_slow(self, driver: RadioDriver, item: Level | str) -> None:
+        if isinstance(item, str) and item.startswith("scope:"):
+            name = item.split(":", 1)[1]
+            mark = self._writes.get(item, 0)
+            value = await driver.get_scope_setting(name)
+            if self._unchanged_since(item, mark) and self.state.scope.get(name) != value:
+                self._update(scope={**self.state.scope, name: value})
+            return
         if item == "data_mode":
             mark = self._writes.get("data_mode", 0)
             on = await driver.get_data_mode()
@@ -326,6 +342,12 @@ class RadioStation:
             self._bump("frequency")
             self._update(frequency_hz=ev.value)
             self._spawn(self.tx.frequency_changed(ev.value))
+        elif ev.kind == "scope" and isinstance(ev.value, ScopeLine):
+            for listener in list(self._scope_listeners):
+                try:
+                    listener(ev.value)
+                except Exception:
+                    log.exception("scope listener failed")
         elif ev.kind == "mode" and isinstance(ev.value, ModeSetting):
             self._bump("mode")
             self._update(mode=ev.value.mode.value, filter=ev.value.filter)
@@ -353,6 +375,31 @@ class RadioStation:
                 listener(new)
             except Exception:
                 log.exception("state listener failed")
+
+    # -- scope ---------------------------------------------------------------
+    def add_scope_listener(self, listener: ScopeListener) -> None:
+        self._scope_listeners.append(listener)
+
+    def remove_scope_listener(self, listener: ScopeListener) -> None:
+        with contextlib.suppress(ValueError):
+            self._scope_listeners.remove(listener)
+
+    async def set_scope_demand(self, wanted: bool) -> None:
+        """Hub calls this as viewers come and go: scope data only flows while someone watches.
+
+        Scope data shares the CI-V link with control traffic, so it is off when no
+        one is looking at it.
+        """
+        if wanted == self._scope_wanted:
+            return
+        self._scope_wanted = wanted
+        driver = self._driver
+        if driver is None or not self._connected or Feature.SCOPE not in driver.features:
+            return
+        try:
+            await driver.set_scope_output(wanted)
+        except RadioError as exc:
+            log.warning("scope %s failed on %s: %s", "on" if wanted else "off", self.cfg.id, exc)
 
     # -- controls ----------------------------------------------------------
     def _require_control(self, op: Operator) -> RadioDriver:
@@ -383,6 +430,16 @@ class RadioStation:
         self._update(levels={**self.state.levels, level.value: value})
         if level is Level.RF_POWER:
             await self.tx.power_changed(value)
+
+    async def set_scope_setting(self, op: Operator, name: str, value: Any) -> None:
+        driver = self._require_control(op)
+        if name not in driver.scope_settings_supported():
+            raise ControlDenied(f"{driver.model_name} has no scope setting {name!r}")
+        key = f"scope:{name}"
+        self._bump(key)
+        await driver.set_scope_setting(name, value)
+        self._bump(key)
+        self._update(scope={**self.state.scope, name: value})
 
     async def set_data_mode(self, op: Operator, on: bool) -> None:
         driver = self._require_control(op)

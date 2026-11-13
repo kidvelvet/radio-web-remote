@@ -51,6 +51,13 @@ class MeterCal:
 
 
 @dataclass(frozen=True)
+class ScopeSpec:
+    points: int  # waveform length
+    max_value: int  # top of the data range
+    source: Source
+
+
+@dataclass(frozen=True)
 class IcomModel:
     name: str  # display name, e.g. "IC-7300"
     driver_name: str  # registry key, e.g. "icom.ic7300"
@@ -59,6 +66,7 @@ class IcomModel:
     modes: dict[Mode, Sourced]
     filters: dict[int, Sourced] = field(default_factory=dict)  # 1 -> FIL1 code, ...
     meters: dict[Meter, MeterCal] = field(default_factory=dict)
+    scope: ScopeSpec | None = None
     # Highest frequency the frequency encoding allows for this model. A real
     # band-edge table is P1 work; this only stops nonsense values.
     max_encodable_hz: int = 9_999_999_999
@@ -81,6 +89,9 @@ class IcomModel:
             f.add(Feature.TRANSCEIVE)
         if CivCommand.DATA_MODE in self.commands:
             f.add(Feature.DATA_MODE)
+        scope_cmds = {CivCommand.SCOPE_DATA, CivCommand.SCOPE_ON, CivCommand.SCOPE_OUTPUT}
+        if self.scope is not None and scope_cmds <= self.commands.keys():
+            f.add(Feature.SCOPE)
         for level, cmd in LEVEL_COMMANDS.items():
             if cmd in self.commands:
                 f.add(Feature(f"level_{level.value}"))

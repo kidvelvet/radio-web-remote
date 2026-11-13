@@ -47,6 +47,34 @@
       <div class="row bands" id="bands" aria-label="Bands"></div>
     </section>
 
+    <section class="panel span2 scope-panel" aria-label="Spectrum scope" data-feature="scope">
+      <div class="row">
+        <h2 class="grow">Scope <span class="muted small" id="scope-edges"></span></h2>
+        <button type="button" id="scope-toggle" aria-pressed="false">Scope</button>
+      </div>
+      <div id="scope-body" class="hidden">
+        <canvas id="spectrum" class="spectrum" aria-label="Spectrum, tap to tune"></canvas>
+        <canvas id="waterfall" class="waterfall" aria-label="Waterfall, tap to tune"></canvas>
+        <div class="row scale">
+          <label for="scope-floor">Floor</label><input type="range" id="scope-floor" min="0" max="95">
+          <label for="scope-ceiling">Ceiling</label><input type="range" id="scope-ceiling" min="5" max="100">
+        </div>
+        <div class="row wrap scope-controls" id="scope-controls">
+          <label>Mode <select id="sc-mode" data-scope="mode"><option value="center">Center</option><option value="fixed">Fixed</option></select></label>
+          <label class="sc-center">Span <select id="sc-span" data-scope="span">
+            <option value="2500">&#177;2.5 kHz</option><option value="5000">&#177;5 kHz</option>
+            <option value="10000">&#177;10 kHz</option><option value="25000">&#177;25 kHz</option>
+            <option value="50000">&#177;50 kHz</option><option value="100000">&#177;100 kHz</option>
+            <option value="250000">&#177;250 kHz</option><option value="500000">&#177;500 kHz</option></select></label>
+          <label class="sc-fixed">Edge <select id="sc-edge" data-scope="edge"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+          <label>Ref <select id="sc-ref" data-scope="ref"></select></label>
+          <label>Speed <select id="sc-speed" data-scope="speed"><option value="fast">Fast</option><option value="mid">Mid</option><option value="slow">Slow</option></select></label>
+          <button type="button" id="sc-hold" aria-pressed="false">Hold</button>
+          <span class="muted small" id="sc-note"></span>
+        </div>
+      </div>
+    </section>
+
     <section class="panel" aria-label="Mode and filter">
       <h2>Mode</h2>
       <div class="row wrap" id="modes"></div>

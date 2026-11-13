@@ -248,3 +248,36 @@ async def test_levels_meters_and_data_mode(rig):
     assert sim.state.data_mode and sim.state.filter_code == 0x02
     await driver.set_data_mode(False)
     assert not sim.state.data_mode
+
+
+async def test_scope_output_lines_and_settings(rig):
+    from radio_web_remote.radios.base import ScopeLine, StateEvent
+
+    driver, sim, _ = rig
+    lines: list[ScopeLine] = []
+    driver.add_listener(lambda e: lines.append(e.value) if e.kind == "scope" else None)
+    sim.scope_interval_s = 0.05
+    await driver.set_scope_output(True)
+    for _ in range(100):
+        if len(lines) >= 2:
+            break
+        await asyncio.sleep(0.02)
+    assert len(lines) >= 2
+    line = lines[-1]
+    assert (line.low_hz, line.high_hz) == (14_074_000 - 50_000, 14_074_000 + 50_000)
+    assert len(line.points) == 475 and max(line.points) >= 100  # the 14.074 test carrier
+    # Control traffic still works while scope data streams.
+    assert await driver.get_frequency() == 14_074_000
+    assert await driver.get_scope_setting("span") == 50_000
+    await driver.set_scope_setting("span", 25_000)
+    await driver.set_scope_setting("mode", "fixed")
+    await driver.set_scope_setting("ref", -10.5)
+    await driver.set_scope_setting("speed", "slow")
+    assert await driver.get_scope_setting("mode") == "fixed"
+    assert await driver.get_scope_setting("ref") == -10.5
+    assert await driver.get_scope_setting("speed") == "slow"
+    assert sim.state.scope_span == 25_000
+    await driver.set_scope_output(False)
+    assert not sim.state.scope_output
+    assert driver.scope.stats.dropped == 0
+    _ = StateEvent

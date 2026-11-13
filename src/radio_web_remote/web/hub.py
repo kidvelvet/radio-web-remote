@@ -11,6 +11,8 @@ Client -> server (JSON):
   {"type": "set_mode", "mode": "USB", "filter": 1 | null}
   {"type": "set_level", "level": "af" | "rf_gain" | "squelch" | "rf_power", "value": 0..255}
   {"type": "set_data_mode", "on": true | false}
+  {"type": "scope", "on": true | false}   subscribe to scope lines (binary frames)
+  {"type": "set_scope", "setting": "mode"|"span"|"edge"|"hold"|"ref"|"speed", "value": ...}
 
 Server -> client (JSON):
   {"type": "hello", "conn": ..., "user": {...}, "radio": "<id>"}
@@ -25,6 +27,7 @@ backlog on a slow phone link.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import itertools
 import json
@@ -39,6 +42,7 @@ from radio_web_remote.radios.base import Level, Mode, ModeSetting, RadioError
 from radio_web_remote.security.users import Session
 from radio_web_remote.station.radio_station import ControlDenied, RadioState, RadioStation
 from radio_web_remote.station.tx_controller import Operator, StopReason, TxDenied
+from radio_web_remote.web.scope_wire import encode_scope_line
 
 log = logging.getLogger(__name__)
 
@@ -58,10 +62,17 @@ class _Conn:
         self.radio_id = radio_id
         self.pending_state: dict[str, Any] | None = None
         self.messages: list[dict[str, Any]] = []
+        self.scope_on = False
+        # Newest few scope lines only: a slow link drops waterfall rows, never control.
+        self.scope_lines: collections.deque[bytes] = collections.deque(maxlen=3)
         self.wake = asyncio.Event()
 
     def push_state(self, state: dict[str, Any]) -> None:
         self.pending_state = state
+        self.wake.set()
+
+    def push_scope(self, frame: bytes) -> None:
+        self.scope_lines.append(frame)
         self.wake.set()
 
     def push(self, msg: dict[str, Any]) -> None:
@@ -77,6 +88,7 @@ class Hub:
         self._conns: dict[str, _Conn] = {}
         self._ids = itertools.count(1)
         self._listeners: dict[str, Callable[[RadioState], None]] = {}
+        self._scope_listeners: dict[str, Callable[[Any], None]] = {}
 
     def start(self) -> None:
         for rid, st in self.stations.items():
@@ -92,10 +104,23 @@ class Hub:
             self._listeners[rid] = on_state
             st.add_listener(on_state)
 
+            def on_scope(line: Any, rid: str = rid) -> None:
+                frame: bytes | None = None
+                for c in self._conns.values():
+                    if c.radio_id == rid and c.scope_on:
+                        frame = frame or encode_scope_line(line)
+                        c.push_scope(frame)
+
+            self._scope_listeners[rid] = on_scope
+            st.add_scope_listener(on_scope)
+
     async def close(self) -> None:
         for rid, cb in self._listeners.items():
             self.stations[rid].remove_listener(cb)
+        for rid, scb in self._scope_listeners.items():
+            self.stations[rid].remove_scope_listener(scb)
         self._listeners.clear()
+        self._scope_listeners.clear()
         for c in list(self._conns.values()):
             with contextlib.suppress(Exception):
                 await c.ws.close(code=1001)
@@ -142,6 +167,8 @@ class Hub:
             log.exception("control connection %s failed", conn_id)
         finally:
             self._conns.pop(conn_id, None)
+            if conn.scope_on:
+                await asyncio.shield(self._update_scope_demand(radio_id))
             # Server-side fail-safe: a closed connection never keeps the transmitter.
             # Shielded: this handler is often being cancelled when we get here.
             await asyncio.shield(station.tx.client_gone(conn_id, StopReason.CONNECTION_CLOSED))
@@ -157,10 +184,18 @@ class Hub:
             conn.wake.clear()
             msgs, conn.messages = conn.messages, []
             state, conn.pending_state = conn.pending_state, None
+            lines = list(conn.scope_lines)
+            conn.scope_lines.clear()
             for m in msgs:
                 await conn.ws.send_text(json.dumps(m))
             if state is not None:
                 await conn.ws.send_text(json.dumps({"type": "state", "state": state}))
+            for frame in lines:
+                await conn.ws.send_bytes(frame)
+
+    async def _update_scope_demand(self, radio_id: str) -> None:
+        wanted = any(c.scope_on for c in self._conns.values() if c.radio_id == radio_id)
+        await self.stations[radio_id].set_scope_demand(wanted)
 
     async def _revalidate(self, conn: _Conn, revalidate: Revalidate) -> None:
         while True:
@@ -203,6 +238,28 @@ class Hub:
                     await tx.ptt_down(op)
                 else:
                     await tx.ptt_up(op)
+            elif kind == "scope":
+                on = msg.get("on")
+                if not isinstance(on, bool):
+                    raise ValueError("on must be true or false")
+                conn.scope_on = on
+                if not on:
+                    conn.scope_lines.clear()
+                await self._update_scope_demand(conn.radio_id)
+            elif kind == "set_scope":
+                name = msg.get("setting")
+                value = msg.get("value")
+                checks = {
+                    "mode": lambda v: v in ("center", "fixed"),
+                    "span": lambda v: isinstance(v, int) and not isinstance(v, bool),
+                    "edge": lambda v: v in (1, 2, 3) and not isinstance(v, bool),
+                    "hold": lambda v: isinstance(v, bool),
+                    "ref": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
+                    "speed": lambda v: v in ("fast", "mid", "slow"),
+                }
+                if name not in checks or not checks[name](value):
+                    raise ValueError("bad scope setting")
+                await station.set_scope_setting(op, str(name), value)
             elif kind == "visibility":
                 if msg.get("hidden") is True:
                     await tx.client_gone(op.session_id, StopReason.HIDDEN)

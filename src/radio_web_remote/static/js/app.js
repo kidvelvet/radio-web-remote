@@ -4,6 +4,8 @@
 // fast paths only: it releases PTT on pointer up, key up, window blur, page
 // hidden and page hide, and sends heartbeats while connected.
 
+import { Scope } from "./scope.js";
+
 const $ = (id) => document.getElementById(id);
 
 // Tuning presets inside each band (not band edges; limits come from the server).
@@ -26,6 +28,7 @@ const app = {
   me: null, ws: null, hello: null, state: null, retry: 500,
   heartbeat: null, ptt: false, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
+  scope: null, scopeOn: false,
 };
 
 // ---------- formatting ----------
@@ -52,10 +55,12 @@ function send(obj) {
 function connect() {
   const radio = new URLSearchParams(location.search).get("radio") || app.me.radios[0]?.id || "";
   const ws = new WebSocket(`wss://${location.host}/ws?radio=${encodeURIComponent(radio)}`);
+  ws.binaryType = "arraybuffer";
   app.ws = ws;
   setLink("connecting");
   ws.onopen = () => { app.retry = 500; setLink("up"); };
   ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) { app.scope?.push(ev.data); return; }
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === "hello") onHello(msg);
@@ -85,6 +90,7 @@ function onHello(msg) {
   const every = Math.max(100, (msg.heartbeat_interval_s || 0.5) * 1000);
   app.heartbeat = setInterval(() => send({ type: "heartbeat" }), every);
   $("ptt").disabled = !msg.may_transmit;
+  if (app.scopeOn) send({ type: "scope", on: true });  // resubscribe after a reconnect
   if (!msg.may_transmit) $("ptthint").textContent = "Your account can listen but not transmit.";
 }
 function stopHeartbeat() { if (app.heartbeat) clearInterval(app.heartbeat); app.heartbeat = null; }
@@ -141,6 +147,10 @@ function render(s) {
     el.value = m ? m.raw : 0;
     $(`m-${key}-t`).textContent = meterText(m);
   }
+  app.scope?.setMarker(s.frequency_hz);
+  renderScopeSettings(s.scope);
+  const listener = app.hello && !app.hello.may_transmit && app.hello.user.role === "listener";
+  document.querySelectorAll("#scope-controls select, #sc-hold").forEach((el) => { el.disabled = !!listener; });
   renderTx(s, prev);
   if (!s.connected) $("txtext").textContent = s.error ? `Radio not connected: ${s.error}` : "Radio not connected";
 }
@@ -352,6 +362,61 @@ function wireControls() {
   });
 }
 
+// ---------- scope ----------
+function setScope(on) {
+  app.scopeOn = on;
+  $("scope-toggle").setAttribute("aria-pressed", String(on));
+  $("scope-body").classList.toggle("hidden", !on);
+  try { localStorage.setItem("rwr.scope.on", on ? "1" : "0"); } catch { /* fine */ }
+  if (on && !app.scope) {
+    app.scope = new Scope({
+      spectrum: $("spectrum"), waterfall: $("waterfall"),
+      floor: $("scope-floor"), ceiling: $("scope-ceiling"), edges: $("scope-edges"),
+      onTune: (hz) => jumpTo(hz), stepHz: () => step(),
+    });
+  }
+  if (on) app.scope.resize();
+  send({ type: "scope", on });
+}
+
+function renderScopeSettings(sc) {
+  if (!sc) return;
+  const known = sc.mode === "center" || sc.mode === "fixed";
+  $("sc-note").textContent = sc.mode && !known ? `Radio is in ${sc.mode}` : "";
+  for (const sel of document.querySelectorAll("#scope-controls select[data-scope]")) {
+    const v = sc[sel.dataset.scope];
+    if (v != null && document.activeElement !== sel) sel.value = String(v);
+  }
+  document.querySelectorAll(".sc-center").forEach((el) => el.classList.toggle("hidden", sc.mode !== "center"));
+  document.querySelectorAll(".sc-fixed").forEach((el) => el.classList.toggle("hidden", sc.mode === "center"));
+  $("sc-hold").setAttribute("aria-pressed", String(!!sc.hold));
+}
+
+function wireScope() {
+  $("scope-toggle").addEventListener("click", () => setScope(!app.scopeOn));
+  const ref = $("sc-ref");
+  for (let db = 20; db >= -20; db -= 0.5) {
+    const o = document.createElement("option");
+    o.value = String(db);
+    o.textContent = `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+    ref.append(o);
+  }
+  for (const sel of document.querySelectorAll("#scope-controls select[data-scope]")) {
+    sel.addEventListener("change", () => {
+      const name = sel.dataset.scope;
+      let value = sel.value;
+      if (name === "span" || name === "edge") value = Number(value);
+      if (name === "ref") value = Number(value);
+      send({ type: "set_scope", setting: name, value });
+      sel.blur();
+    });
+  }
+  $("sc-hold").addEventListener("click", () => send({ type: "set_scope", setting: "hold", value: !app.state?.scope?.hold }));
+  let saved = false;
+  try { saved = localStorage.getItem("rwr.scope.on") === "1"; } catch { /* fine */ }
+  if (saved) setScope(true);
+}
+
 // ---------- misc ----------
 async function requestWakeLock() {
   try {
@@ -380,6 +445,7 @@ async function boot() {
   wirePtt();
   wireTuning();
   wireControls();
+  wireScope();
   document.addEventListener("pointerdown", requestWakeLock, { once: true });
   connect();
 }

@@ -36,6 +36,15 @@ class CivCommand(Enum):
     SWR_METER = (0x15, b"\x12")
     ALC_METER = (0x15, b"\x13")
     DATA_MODE = (0x1A, b"\x06")  # data: on/off, then filter (p. 19-9)
+    SCOPE_DATA = (0x27, b"\x00")  # radio -> controller, unsolicited while output is on
+    SCOPE_ON = (0x27, b"\x10")
+    SCOPE_OUTPUT = (0x27, b"\x11")
+    SCOPE_MODE = (0x27, b"\x14")  # these four and below take a 00 selector byte first
+    SCOPE_SPAN = (0x27, b"\x15")
+    SCOPE_EDGE = (0x27, b"\x16")
+    SCOPE_HOLD = (0x27, b"\x17")
+    SCOPE_REF = (0x27, b"\x19")
+    SCOPE_SPEED = (0x27, b"\x1a")
 
     @property
     def prefix(self) -> bytes:
