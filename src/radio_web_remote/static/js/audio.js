@@ -25,7 +25,7 @@ export class BrowserAudio {
 
   get running() { return !!this.ctx; }
 
-  async start({ playback, microphone, processing, volume, micId, speakerId }) {
+  async start({ playback, microphone, processing, volume, micId, speakerId, rtc }) {
     if (!window.isSecureContext || !window.AudioContext) {
       throw new AudioUnavailable("This page is not a secure context. Install the certificate from /setup.");
     }
@@ -60,12 +60,14 @@ export class BrowserAudio {
     }
     await ctx.audioWorklet.addModule("/static/js/worklets/player.js");
     await ctx.audioWorklet.addModule("/static/js/worklets/capture.js");
-    if (playback) {
+    this.gain = new GainNode(ctx, { gain: volume });
+    this.gain.connect(ctx.destination);
+    if (playback && !rtc) {
       this.player = new AudioWorkletNode(ctx, "rx-player", { numberOfInputs: 0, outputChannelCount: [2] });
       this.player.port.onmessage = (ev) => this.onStats?.(ev.data);
-      this.gain = new GainNode(ctx, { gain: volume });
-      this.player.connect(this.gain).connect(ctx.destination);
+      this.player.connect(this.gain);
     }
+    if (new URLSearchParams(location.search).has("bench")) window.rwrBench = { ctx, out: this.gain };
     if (stream) {
       this.mic = stream;
       const src = new MediaStreamAudioSourceNode(ctx, { mediaStream: stream });
@@ -75,9 +77,53 @@ export class BrowserAudio {
       const mute = new GainNode(ctx, { gain: 0 });
       src.connect(this.capture).connect(mute).connect(ctx.destination);
     }
+    if (rtc) await this.startRtc(rtc, stream, playback);
   }
 
+  // EXPERIMENTAL (ADR 0002): receive and transmit audio over WebRTC instead of the socket.
+  async startRtc({ conn, csrf }, stream, playback) {
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    this.pc = pc;
+    if (window.rwrBench) window.rwrBench.pc = pc;
+    if (stream) {
+      this.rtcMic = stream.getAudioTracks()[0];
+      this.rtcMic.enabled = false;  // silent until PTT
+      pc.addTrack(this.rtcMic, stream);
+    } else {
+      pc.addTransceiver("audio", { direction: "recvonly" });
+    }
+    pc.ontrack = (ev) => {
+      if (!playback) return;
+      const remote = ev.streams[0] || new MediaStream([ev.track]);
+      // Chrome only feeds a remote WebRTC stream into Web Audio if a media element also holds it.
+      const el = document.createElement("audio");
+      el.muted = true;
+      el.srcObject = remote;
+      el.play().catch(() => {});
+      this.rtcEl = el;
+      new MediaStreamAudioSourceNode(this.ctx, { mediaStream: remote }).connect(this.gain);
+      this.onStats?.({ bufferedMs: 0, underruns: 0, trims: 0, peakDb: null, rtc: true });
+    };
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") return resolve();
+      pc.addEventListener("icegatheringstatechange", () => pc.iceGatheringState === "complete" && resolve());
+      setTimeout(resolve, 3000);
+    });
+    const r = await fetch("/api/rtc/offer", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify({ conn, sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    });
+    if (!r.ok) throw new AudioUnavailable(`WebRTC setup failed (${r.status})`);
+    await pc.setRemoteDescription(await r.json());
+  }
+
+  setTxEnabled(on) { if (this.rtcMic) this.rtcMic.enabled = on; }
+
   async stop() {
+    this.pc?.close();
+    this.pc = this.rtcMic = this.rtcEl = null;
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
     if (this.ctx) await this.ctx.close().catch(() => {});

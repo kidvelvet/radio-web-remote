@@ -222,6 +222,7 @@ function setPtt(down) {
     requestWakeLock();
   }
   localPtt(down);
+  app.audio?.setTxEnabled(down && app.audioMode === "remote");
   send({ type: "ptt", down });
 }
 
@@ -441,6 +442,7 @@ function audioStatus() {
   if (!app.audioMode) return "Audio is off. Tap Start audio.";
   if (app.audioMode === "host") return "Using the radio computer's microphone and speaker.";
   const st = app.rxStats;
+  if (st?.rtc) return app.audioMode === "monitor" ? "Listening (WebRTC)." : "Mic and speaker on (WebRTC).";
   const lvl = st && st.peakDb != null ? (st.peakDb <= -100 ? ", silent" : `, level ${st.peakDb} dB`) : "";
   const rx = st ? `buffer ${st.bufferedMs} ms, ${st.underruns} gaps${lvl}` : "waiting for audio";
   return app.audioMode === "monitor" ? `Listening: ${rx}.` : `Mic and speaker on: ${rx}.`;
@@ -451,7 +453,7 @@ function onMicFrame(samples, peak) {
   $("au-mic").value = db;
   $("au-mic-t").textContent = `${Math.round(db)} dB`;
   // Send microphone audio only while this page holds PTT; the server ignores it otherwise.
-  if (app.ptt && app.audioMode === "remote" && app.ws?.readyState === WebSocket.OPEN) {
+  if (app.ptt && app.audioMode === "remote" && app.ws?.readyState === WebSocket.OPEN && !app.audio.pc) {
     app.ws.send(app.audio.txFrame(samples));
   }
 }
@@ -460,6 +462,8 @@ async function startAudio() {
   const mode = $("au-mode").value;
   const btn = $("au-start");
   btn.disabled = true;
+  // Tell the server first: the WebRTC offer (hidden experiment) needs a mode set.
+  send({ type: "audio", mode });
   try {
     if (mode !== "host") {
       app.audio = new BrowserAudio({
@@ -477,15 +481,18 @@ async function startAudio() {
         volume: Number($("au-vol").value) / 100,
         micId: $("au-mic-dev").value || null,
         speakerId: $("au-spk-dev").value || null,
+        // Hidden experiment (ADR 0002): ?transport=webrtc
+        rtc: new URLSearchParams(location.search).get("transport") === "webrtc"
+          ? { conn: app.hello?.conn, csrf: app.me.csrf } : null,
       });
       await fillDevices();  // labels are only visible after mic permission
     }
     app.audioMode = mode;
-    send({ type: "audio", mode });
     btn.textContent = "Stop audio";
     btn.classList.remove("primary");
     $("au-mode").disabled = true;
   } catch (e) {
+    send({ type: "audio", mode: null });
     await app.audio?.stop();
     app.audio = null;
     const text = e instanceof AudioUnavailable ? e.message : `Audio failed: ${e && e.message ? e.message : e}`;

@@ -32,6 +32,11 @@ dependencies = [
 [project.scripts]
 radio-web-remote = "radio_web_remote.cli:main"
 
+[project.optional-dependencies]
+webrtc = [
+    "aiortc>=1.16,<2",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.2,<10",
@@ -76,5 +81,5 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["serial", "serial.*", "sounddevice"]
+module = ["serial", "serial.*", "sounddevice", "aiortc", "aiortc.*", "av", "av.*"]
 ignore_missing_imports = true

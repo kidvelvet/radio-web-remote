@@ -275,6 +275,30 @@ def create_app(
         resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
 
+    @app.post("/api/rtc/offer")
+    async def rtc_offer(request: Request) -> JSONResponse:
+        """EXPERIMENTAL (ADR 0002): WebRTC audio for one of the caller's own control sockets."""
+        sess = await current_session(request)
+        if sess is None:
+            return JSONResponse({"error": "login required"}, 401)
+        if not require_csrf(request, sess.csrf):
+            return JSONResponse({"error": "csrf"}, 403)
+        try:
+            body = await request.json()
+            conn_id, sdp, kind = str(body["conn"]), str(body["sdp"]), str(body["type"])
+        except Exception:
+            return JSONResponse({"error": "bad request"}, 400)
+        conn = ctx.hub.connection(conn_id)
+        if conn is None or conn.public_id != sess.public_id or kind != "offer" or len(sdp) > 20_000:
+            return JSONResponse({"error": "no such connection"}, 404)
+        if conn.audio_mode is None:
+            return JSONResponse({"error": "start audio on the control socket first"}, 409)
+        try:
+            answer = await ctx.hub.rtc.answer(conn_id, stations[conn.radio_id], sdp, kind)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, 501)
+        return JSONResponse(answer)
+
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
         if not same_origin(websocket.headers.get("origin"), websocket.headers.get("host")):

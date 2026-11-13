@@ -46,6 +46,7 @@ from radio_web_remote.radios.base import Level, Mode, ModeSetting, RadioError
 from radio_web_remote.security.users import Session
 from radio_web_remote.station.radio_station import ControlDenied, RadioState, RadioStation
 from radio_web_remote.station.tx_controller import Operator, StopReason, TxDenied
+from radio_web_remote.web.rtc import RtcPeers
 from radio_web_remote.web.scope_wire import encode_scope_line
 
 log = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ class Hub:
         self._listeners: dict[str, Callable[[RadioState], None]] = {}
         self._scope_listeners: dict[str, Callable[[Any], None]] = {}
         self._audio_listeners: dict[str, Callable[[bytes], None]] = {}
+        self.rtc = RtcPeers()  # experimental WebRTC audio, ADR 0002
 
     def start(self) -> None:
         for rid, st in self.stations.items():
@@ -134,7 +136,9 @@ class Hub:
                 for c in self._conns.values():
                     if c.radio_id != rid or c.audio_mode is None:
                         continue
-                    if c.audio_mode is not AudioMode.HOST:
+                    if c.audio_mode is not AudioMode.HOST and not self.rtc.push_rx(
+                        c.op.session_id, frame_pcm
+                    ):  # a tab using WebRTC gets receive audio there instead
                         frame = frame or pcm.encode_frame(
                             pcm.TYPE_RX_AUDIO, st.audio.rx_seq, frame_pcm
                         )
@@ -155,9 +159,13 @@ class Hub:
         self._audio_listeners.clear()
         self._listeners.clear()
         self._scope_listeners.clear()
+        await self.rtc.close_all()
         for c in list(self._conns.values()):
             with contextlib.suppress(Exception):
                 await c.ws.close(code=1001)
+
+    def connection(self, conn_id: str) -> _Conn | None:
+        return self._conns.get(conn_id)
 
     @property
     def connection_count(self) -> int:
@@ -202,6 +210,7 @@ class Hub:
         finally:
             self._conns.pop(conn_id, None)
             station.audio.remove(conn_id)
+            await asyncio.shield(self.rtc.close(conn_id))
             if conn.scope_on:
                 await asyncio.shield(self._update_scope_demand(radio_id))
             # Server-side fail-safe: a closed connection never keeps the transmitter.
