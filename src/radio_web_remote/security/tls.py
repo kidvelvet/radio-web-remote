@@ -35,6 +35,24 @@ SERVER_KEY_BITS = 2048
 RENEW_WITHIN_DAYS = 30
 
 IPAddr = ipaddress.IPv4Address | ipaddress.IPv6Address
+IPNet = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+# The local CA may only vouch for local names and private addresses (X.509
+# Name Constraints, RFC 5280 4.2.1.10). If its key were ever stolen, it still
+# could not be used to impersonate public websites to devices that trust it.
+LOCAL_DNS_SUFFIXES = ("local", "lan", "home.arpa", "internal", "localhost")
+PRIVATE_NETS: tuple[IPNet, ...] = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",  # RFC 1918
+        "100.64.0.0/10",  # RFC 6598 shared space (used by some VPNs, e.g. Tailscale)
+        "127.0.0.0/8",
+        "::1/128",
+        "fc00::/7",  # loopback, IPv6 unique local
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -100,7 +118,38 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
 
 
-def create_ca(directory: Path, club_name: str) -> tuple[Path, Path]:
+def ca_constraints(sans: SanSet) -> x509.NameConstraints:
+    dns = set(LOCAL_DNS_SUFFIXES) | {d for d in sans.dns if d}
+    nets: set[IPNet] = set(PRIVATE_NETS)
+    for ip in sans.ips:  # e.g. a VPN address outside the private ranges
+        if not any(ip in n for n in PRIVATE_NETS):
+            nets.add(ipaddress.ip_network(ip))
+    permitted: list[x509.GeneralName] = [x509.DNSName(d) for d in sorted(dns)]
+    permitted += [x509.IPAddress(n) for n in sorted(nets, key=str)]
+    return x509.NameConstraints(permitted_subtrees=permitted, excluded_subtrees=None)
+
+
+def uncovered_by_ca(ca_file: Path, sans: SanSet) -> list[str]:
+    """Names in `sans` that the CA's name constraints do not permit ([] if unconstrained)."""
+    ca = x509.load_pem_x509_certificate(ca_file.read_bytes())
+    try:
+        nc = ca.extensions.get_extension_for_class(x509.NameConstraints).value
+    except x509.ExtensionNotFound:
+        return []
+    subtrees = nc.permitted_subtrees or []
+    dns_ok = [g.value.lower() for g in subtrees if isinstance(g, x509.DNSName)]
+    nets_ok = [
+        g.value
+        for g in subtrees
+        if isinstance(g, x509.IPAddress)
+        and isinstance(g.value, ipaddress.IPv4Network | ipaddress.IPv6Network)
+    ]
+    bad = [d for d in sans.dns if not any(d == c or d.endswith("." + c) for c in dns_ok)]
+    bad += [str(ip) for ip in sans.ips if not any(ip in n for n in nets_ok)]
+    return sorted(bad)
+
+
+def create_ca(directory: Path, club_name: str, sans: SanSet | None = None) -> tuple[Path, Path]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=CA_KEY_BITS)
     name = x509.Name(
         [
@@ -133,6 +182,7 @@ def create_ca(directory: Path, club_name: str) -> tuple[Path, Path]:
             critical=True,
         )
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(ca_constraints(sans or SanSet(frozenset(), frozenset())), critical=True)
         .sign(key, hashes.SHA256())
     )
     cert_path, key_path = directory / "ca.crt", directory / "ca.key"
@@ -222,15 +272,27 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
         return TlsFiles(Path(cfg.server.tls.cert_file), Path(cfg.server.tls.key_file), None), None
     d = tls_dir(data_dir)
     changed: list[str] = []
-    if not (d / "ca.crt").exists() or not (d / "ca.key").exists():
-        create_ca(d, cfg.site.club_name)
-        changed.append("created local CA")
     sans = wanted_sans(cfg)
+    if not (d / "ca.crt").exists() or not (d / "ca.key").exists():
+        create_ca(d, cfg.site.club_name, sans)
+        changed.append("created local CA")
+    outside = uncovered_by_ca(d / "ca.crt", sans)
+    if outside:
+        # Issuing them would give clients a certificate they must reject.
+        sans = SanSet(
+            frozenset(x for x in sans.dns if x not in outside),
+            frozenset(x for x in sans.ips if str(x) not in outside),
+        )
+        changed.append(
+            "left out names the local CA may not vouch for: "
+            + ", ".join(outside)
+            + " (run 'radio-web-remote cert reset' to make a new CA that covers them)"
+        )
     reason = needs_new_server_cert(d / "server.crt", sans)
     if reason or "created local CA" in changed:
         # Keep names the old certificate had, so a briefly missing interface
         # does not drop an address clients already use.
-        if (d / "server.crt").exists() and not changed:
+        if (d / "server.crt").exists() and "created local CA" not in changed:
             old = cert_sans(d / "server.crt")
             sans = SanSet(sans.dns | old.dns, sans.ips | old.ips)
         create_server_cert(d, sans, cfg.server.tls.server_cert_days)

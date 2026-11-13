@@ -227,6 +227,24 @@ def _cmd_audio_devices(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_cert(args: argparse.Namespace) -> int:
+    from radio_web_remote.security.tls import cert_sans, ensure_certificates, tls_dir
+
+    cfg = load_config(args.config)
+    d = tls_dir(_data_dir(args))
+    if args.cert_command == "reset":
+        if not args.yes:
+            print("This makes a NEW local CA. Every device must install it again from /setup.")
+            if input("Type RESET to continue: ").strip() != "RESET":
+                return 1
+        for name in ("ca.crt", "ca.key", "server.crt", "server.key"):
+            (d / name).unlink(missing_ok=True)
+    files, changed = ensure_certificates(cfg, _data_dir(args))
+    print(f"TLS: {changed or 'no change'}")
+    print("Server certificate names:", cert_sans(files.cert_file).describe())
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import logging
 
@@ -308,6 +326,14 @@ def build_parser() -> argparse.ArgumentParser:
     lim.add_argument("name")
     lim.add_argument("--bands", help="comma-separated low-high ranges in Hz; omit to clear")
     user.set_defaults(func=_cmd_user)
+
+    cert = sub.add_parser("cert", help="certificates")
+    common(cert)
+    cs = cert.add_subparsers(dest="cert_command", required=True)
+    cs.add_parser("show", help="renew if needed and list the server certificate's names")
+    reset = cs.add_parser("reset", help="make a new local CA (devices must reinstall it)")
+    reset.add_argument("--yes", action="store_true", help="do not ask")
+    cert.set_defaults(func=_cmd_cert)
 
     aud = sub.add_parser("audio", help="audio tools")
     aud_sub = aud.add_subparsers(dest="audio_command", required=True)

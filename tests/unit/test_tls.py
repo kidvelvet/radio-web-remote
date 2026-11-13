@@ -112,3 +112,38 @@ def test_cert_and_key_must_be_set_together():
 def test_cert_days_capped_at_825():
     with pytest.raises(ValueError):
         Config.model_validate({"server": {"tls": {"server_cert_days": 900}}})
+
+
+def test_ca_is_name_constrained_to_local_names_and_private_addresses(issued):
+    _, _, files, _ = issued
+    ca = load(files.ca_cert_file)
+    ext = ca.extensions.get_extension_for_class(x509.NameConstraints)
+    assert ext.critical
+    dns = {g.value for g in ext.value.permitted_subtrees if isinstance(g, x509.DNSName)}
+    nets = {g.value for g in ext.value.permitted_subtrees if isinstance(g, x509.IPAddress)}
+    assert {"local", "lan", "home.arpa", "localhost", "shack.example.test"} <= dns
+    assert ipaddress.ip_network("192.168.0.0/16") in nets
+    assert ipaddress.ip_network("100.64.0.0/10") in nets
+    # Nothing public: the CA cannot vouch for, say, a bank's website.
+    assert not any(d in ("com", "org", "net") for d in dns)
+    assert not any(ipaddress.ip_address("8.8.8.8") in n for n in nets)
+
+
+def test_server_cert_names_are_within_ca_constraints(issued):
+    _, _, files, _ = issued
+    assert tls.uncovered_by_ca(files.ca_cert_file, tls.cert_sans(files.cert_file)) == []
+
+
+def test_public_vpn_address_is_added_to_constraints(tmp_path):
+    cfg = Config.model_validate({"server": {"vpn_ips": ["203.0.113.7"]}})
+    files, _ = tls.ensure_certificates(cfg, tmp_path)
+    assert ipaddress.ip_address("203.0.113.7") in tls.cert_sans(files.cert_file).ips
+    assert tls.uncovered_by_ca(files.ca_cert_file, tls.cert_sans(files.cert_file)) == []
+
+
+def test_name_outside_constraints_is_left_out_with_a_message(tmp_path):
+    tls.ensure_certificates(Config(), tmp_path)
+    later = Config.model_validate({"server": {"hostnames": ["radio.example.com"]}})
+    files, changed = tls.ensure_certificates(later, tmp_path)
+    assert "radio.example.com" in changed and "cert reset" in changed
+    assert "radio.example.com" not in tls.cert_sans(files.cert_file).dns
