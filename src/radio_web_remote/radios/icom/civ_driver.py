@@ -48,8 +48,13 @@ DEFAULT_CONTROLLER = 0xE0
 # 2026-11-13 (docs/hardware-test.md, H7300-6). The controller address is
 # accepted too, in case another model differs.
 BROADCAST = 0x00
-UNKEY_RETRIES = 3
 UNKEY_BUS_WAIT_S = 0.05
+# Observed on an IC-7300 (2026-11-13, docs/hardware-test.md H7300-4): the
+# radio acknowledges TX off at once but still reports TX for roughly 15 to
+# 65 ms. Confirmation therefore polls for a while instead of reading once.
+UNKEY_CONFIRM_S = 0.5  # give up and raise after this long
+UNKEY_POLL_S = 0.02  # between TX-state reads
+UNKEY_RESEND_S = 0.15  # resend TX off if still TX after this long since the last send
 COMMAND_RETRIES = 1  # resend once on timeout; every command we send is idempotent
 
 
@@ -109,7 +114,12 @@ class IcomCivDriver(RadioDriver):
         self.transport.on_data = self._on_bytes
         await self.transport.open()
         # ADR D6 item 6: TX off is the first thing on the wire after (re)connect.
-        await self.unkey(verify=False)
+        # This is what clears a key left by a crashed process (H7300-4, case C).
+        # Confirm it, but do not fail the connect if the radio is silent.
+        try:
+            await self.unkey(verify=True)
+        except RadioTimeout as exc:
+            log.warning("TX off on connect not confirmed: %s", exc)
 
     async def close(self) -> None:
         if self.transport.is_open:
@@ -258,13 +268,18 @@ class IcomCivDriver(RadioDriver):
             await self.transport.send_urgent(self._frame(payload))
         if not verify:
             return
-        for _ in range(UNKEY_RETRIES):
-            try:
+        loop = asyncio.get_running_loop()
+        start = last_send = loop.time()
+        while loop.time() - start < UNKEY_CONFIRM_S:
+            with contextlib.suppress(RadioTimeout):
                 if not await self.get_ptt():
                     return
-            except RadioTimeout:
-                pass
-            async with self._bus.acquire(Priority.URGENT):
-                with contextlib.suppress(RadioTimeout):
-                    await self._exchange(CivCommand.TX_STATE, payload, False)
-        raise RadioTimeout(f"{self.model.name} did not confirm RX after {UNKEY_RETRIES} retries")
+            if loop.time() - last_send >= UNKEY_RESEND_S:
+                async with self._bus.acquire(Priority.URGENT):
+                    with contextlib.suppress(RadioTimeout):
+                        await self._exchange(CivCommand.TX_STATE, payload, False)
+                last_send = loop.time()
+            await asyncio.sleep(UNKEY_POLL_S)
+        raise RadioTimeout(
+            f"{self.model.name} did not report RX within {UNKEY_CONFIRM_S}s of TX off"
+        )

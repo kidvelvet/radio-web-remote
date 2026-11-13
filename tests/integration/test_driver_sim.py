@@ -153,10 +153,10 @@ async def test_silent_radio_times_out():
         await driver.unkey()  # verify loop gives up loudly
     payloads = [f.payload for f in sim.received]
     assert payloads[0] == b"\x1c\x00\x00"  # TX off first, even with no answers
-    assert payloads[1:3] == [b"\x03", b"\x03"]  # one retry on timeout
-    # The unkey loop only ever sends TX off or reads TX state; never TX on.
-    assert all(p in (b"\x1c\x00\x00", b"\x1c\x00") for p in payloads[3:])
-    assert payloads.count(b"\x1c\x00\x00") >= 1 + 1 + 3  # connect, unkey, retries
+    assert payloads.count(b"\x03") == 2  # one retry on timeout
+    # Nothing but TX off, TX-state reads and the frequency read; never TX on.
+    assert set(payloads) <= {b"\x1c\x00\x00", b"\x1c\x00", b"\x03"}
+    assert payloads.count(b"\x1c\x00\x00") >= 3  # connect, unkey, at least one resend
     await host.close()
 
 
@@ -182,3 +182,46 @@ async def test_driver_never_overlaps_commands(rig):
     await asyncio.gather(*jobs)
     assert sim.dropped == []
     assert sim.state.transmitting is False
+
+
+def test_sim_reports_tx_until_release_delay():
+    sim = IcomSimulator(IC7300, tx_release_s=0.05, drop_while_busy=False)
+    read = bytes.fromhex("FEFE94E01C00FD")
+    sim.handle_bytes(bytes.fromhex("FEFE94E01C0001FD"), now=1.0)
+    sim.handle_bytes(bytes.fromhex("FEFE94E01C0000FD"), now=2.0)
+    assert sim.handle_bytes(read, now=2.01).endswith(bytes.fromhex("1C0001FD"))  # still TX
+    assert sim.handle_bytes(read, now=2.06).endswith(bytes.fromhex("1C0000FD"))  # now RX
+
+
+async def test_unkey_waits_for_radio_to_release_tx():
+    # Regression for H7300-4 (2026-11-13): a single immediate read-back saw TX
+    # because the IC-7300 takes tens of ms to report RX after acking TX off.
+    host, radio_end = loopback_pair()
+    sim = IcomSimulator(IC7300, tx_release_s=0.08)
+    attach_loopback(sim, radio_end)
+    await radio_end.open()
+    driver = IcomCivDriver(IC7300, host, response_timeout_s=0.2)
+    await driver.connect()
+    assert await driver.key() is True
+    await driver.unkey()  # must not raise
+    assert sim.reported_tx() is False
+    # Patient, not frantic: at most a couple of TX off resends.
+    assert sim.tx_history.count(False) <= 1 + 1 + 3
+    await driver.close()
+    await radio_end.close()
+
+
+async def test_connect_clears_key_left_by_crashed_process():
+    # H7300-4 case C: a process keyed over CI-V and died; the radio stayed in TX.
+    host, radio_end = loopback_pair()
+    sim = IcomSimulator(IC7300)
+    sim.state.transmitting = True
+    attach_loopback(sim, radio_end)
+    await radio_end.open()
+    driver = IcomCivDriver(IC7300, host, response_timeout_s=0.2)
+    await driver.connect()
+    assert sim.received[0].payload == b"\x1c\x00\x00"
+    assert sim.reported_tx() is False
+    assert await driver.get_ptt() is False
+    await driver.close()
+    await radio_end.close()

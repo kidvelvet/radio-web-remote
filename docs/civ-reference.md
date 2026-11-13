@@ -24,6 +24,8 @@ third-party copy) or confirmed on hardware. Until then the row is a
 | Collision/jam | `FC` | not found in 7300-FM | TODO(verify). Parser drops any frame containing FC; no value we encode can contain it. |
 | Transceive destination | `00` | observed on IC-7300 hardware, 2026-11-13 (H7300-6) | Not in the manual pages read. Driver also accepts the controller address, in case other models differ. |
 | Command pacing | one command at a time | observed on IC-7300 hardware, 2026-11-13 | Back-to-back commands: only one answered. Reply arrives about 3 ms after the command at 115200. |
+| TX release time | TX state reads TX for ~15 to 65 ms after TX off is acked | observed on IC-7300 hardware, 2026-11-13 (H7300-4) | Unkey confirmation polls up to 0.5 s. |
+| CI-V key after controller death | TX persists | observed on IC-7300 hardware, 2026-11-13 (H7300-4 C) | Only a new TX off clears it. |
 
 ## IC-7300
 
@@ -41,10 +43,10 @@ third-party copy) or confirmed on hardware. Until then the row is a
 | Frequency data | 5 bytes, BCD; byte 1 = 10 Hz/1 Hz, byte 2 = 1 kHz/100 Hz, byte 3 = 100 kHz/10 kHz, byte 4 = 10 MHz/1 MHz, byte 5 = 1000 MHz/100 MHz (fixed 0) | 7300-FM p. 19-8 | Higher digit in the high nibble, from the digit-label order. No worked example in the manual. Confirmed on IC-7300 hardware 2026-11-13 (H7300-1): reply `00 60 33 14 00` = 14.336.000 Hz, matching the front panel. |
 | Mode codes | LSB 00, USB 01, AM 02, CW 03, RTTY 04, FM 05, CW-R 07, RTTY-R 08 | 7300-FM p. 19-8 | 06 not listed |
 | Filter codes | FIL1 01, FIL2 02, FIL3 03 | 7300-FM pp. 19-8, 19-9 | |
-| CI-V Transceive setting | `1A 05 0071`, 00 OFF / 01 ON | 7300-FM p. 19-5 | not used yet |
+| CI-V Transceive setting | `1A 05 0071`, 00 OFF / 01 ON | 7300-FM p. 19-5 | Read `01` with Transceive ON (H7300-6), but not checked with it OFF. Same firmware caveat as Echo Back. Not used yet. |
 | CI-V Output (for ANT) | `1A 05 0073` | 7300-FM p. 19-5 | p. 19-7 cites `1A 05 0157` for this, which the table lists as something else. Internal inconsistency; TODO(verify). |
 | CI-V USB port (link/unlink REMOTE) | `1A 05 0074`, read only | 7300-FM p. 19-5 | not used yet |
-| USB Echo Back | `1A 05 0075`, 00 ON / 01 OFF | 7300-FM p. 19-5 | Note inverted polarity as read. TODO(verify). Not used yet. |
+| USB Echo Back | `1A 05 0075`, 00 ON / 01 OFF | 7300-FM p. 19-5 | **Does not match hardware.** On the maintainer's IC-7300 (firmware not recorded) it read `00` with the menu both ON and OFF (H7300-5). Menu item numbers may shift between firmware versions. Do not use any `1A 05` item until checked on the firmware in use. |
 
 ## IC-705, IC-9700
 

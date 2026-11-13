@@ -65,10 +65,10 @@ The client never decides to unkey on its own behalf as the only path. Client-sid
 
 The rule is about control link malfunction, which the 2 s heartbeat timeout already covers. The 180 s cap is therefore not strictly required for normal operation. I still recommend keeping it as a hard ceiling, because it is the only layer that catches failures where heartbeats keep arriving but no one is in control (stuck spacebar, toggle-mode PTT left on in an open tab, a client bug). Cost: transmissions longer than 3 minutes need a re-key. Admins can lower it, not raise or disable it.
 
-**Residual risk: the server process itself dies while keyed.** With CI-V PTT, the radio stays in TX until something sends TX off. Mitigations, in order:
+**Residual risk: the server process itself dies while keyed.** With CI-V PTT, the radio stays in TX until something sends TX off. Confirmed on an IC-7300 on 2026-11-13: the key survived the process dying and the port closing; the next connect's TX off cleared it within 67 ms (docs/hardware-test.md, H7300-4). Mitigations, in order:
 
 - The service manager (systemd, launchd, Task Scheduler) restarts the server, and startup sends TX off first (item 6). Target: unkey within seconds of a crash.
-- DTR/RTS PTT ("USB SEND" set to DTR or RTS) has the opposite failure mode: the OS deasserts the line when the port handle closes, including on process death. TODO(verify) per OS and on hardware. Docs will explain this trade-off; CI-V remains the default as briefed.
+- DTR/RTS PTT ("USB SEND" set to DTR or RTS) has the opposite failure mode: the OS deasserts the line when the port handle closes, including on process death. Opening the port never keys (H7300-3, macOS); whether the line drops on process death is TODO(verify) per OS and on hardware. Docs will explain this trade-off; CI-V remains the default as briefed.
 - The radio's own transmit time-out timer, where a model has one. TODO(verify) per model; if present, `docs/radio-setup.md` will recommend enabling it.
 - Unplugging the USB cable while keyed: radio behavior unknown. TODO(verify) on hardware, listed in `docs/hardware-test.md`.
 

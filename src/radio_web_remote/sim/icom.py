@@ -53,6 +53,9 @@ class IcomSimulator:
     # goes unanswered. Runners deliver replies after reply_delay_s.
     reply_delay_s: float = 0.003
     drop_while_busy: bool = True
+    # Also observed (H7300-4): after TX off is acknowledged the radio keeps
+    # reporting TX for roughly 15 to 65 ms.
+    tx_release_s: float = 0.04
     state: SimState = field(default_factory=SimState)
     dropped: list[Frame] = field(default_factory=list)
     received: list[Frame] = field(default_factory=list)
@@ -63,6 +66,7 @@ class IcomSimulator:
         if self.address is None:
             self.address = self.model.default_address.value
         self._busy_until = 0.0
+        self._rx_at: float | None = None  # when a pending TX -> RX switch completes
 
     @property
     def addr(self) -> int:
@@ -85,7 +89,7 @@ class IcomSimulator:
             self.received.append(frame)
             if self.silent:
                 continue
-            reply = self._handle(frame)
+            reply = self._handle(frame, now)
             if reply is not None:
                 out += encode_frame(frame.from_addr, self.addr, reply)
                 self._busy_until = now + self.reply_delay_s
@@ -108,7 +112,14 @@ class IcomSimulator:
         )
 
     # -- command handling --------------------------------------------------
-    def _handle(self, frame: Frame) -> bytes | None:
+    def reported_tx(self, now: float | None = None) -> bool:
+        """TX state as the radio would report it: still TX until the release delay passes."""
+        if self.state.transmitting:
+            return True
+        now = time.monotonic() if now is None else now
+        return self._rx_at is not None and now < self._rx_at
+
+    def _handle(self, frame: Frame, now: float) -> bytes | None:
         p = frame.payload
         m = self.model
         ok, ng = bytes([OK]), bytes([NG])
@@ -141,12 +152,15 @@ class IcomSimulator:
         if p.startswith(CivCommand.TX_STATE.prefix) and m.supports(CivCommand.TX_STATE):
             data = p[len(CivCommand.TX_STATE.prefix) :]
             if not data:
-                return CivCommand.TX_STATE.prefix + (
-                    b"\x01" if self.state.transmitting else b"\x00"
-                )
+                return CivCommand.TX_STATE.prefix + (b"\x01" if self.reported_tx(now) else b"\x00")
             if data in (b"\x00", b"\x01"):
-                self.state.transmitting = data == b"\x01"
-                self.tx_history.append(self.state.transmitting)
+                want_tx = data == b"\x01"
+                if want_tx:
+                    self._rx_at = None
+                elif self.state.transmitting and self._rx_at is None:
+                    self._rx_at = now + self.tx_release_s
+                self.state.transmitting = want_tx
+                self.tx_history.append(want_tx)
                 return ok
             return ng
         return ng
