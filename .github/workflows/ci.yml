@@ -87,5 +87,13 @@ jobs:
       - name: Install browser engines
         run: uv run playwright install --with-deps chromium firefox webkit
 
+      # The runner has no sound card; give the browsers a virtual one.
+      - name: Virtual audio device
+        run: |
+          sudo apt-get install -y --no-install-recommends pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=ci_null
+          pactl set-default-sink ci_null
+
       - name: Browser tests
         run: uv run pytest -m e2e --browser chromium --browser firefox --browser webkit -o faulthandler_timeout=120

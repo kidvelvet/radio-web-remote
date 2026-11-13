@@ -100,3 +100,7 @@ label.check input { width: 22px; height: 22px; }
 .scope-controls select { min-height: 40px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; padding: 0 6px; }
 label.inline { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ink); }
 label.inline select { min-height: var(--tap); border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; padding: 0 8px; max-width: 100%; }
+/* Long device names must not widen the page on phones. */
+label.inline { min-width: 0; max-width: 100%; }
+label.inline select { min-width: 0; width: 100%; text-overflow: ellipsis; }
+.devices label.inline, .panel .row > label.inline { flex: 1 1 260px; }

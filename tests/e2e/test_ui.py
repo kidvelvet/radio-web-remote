@@ -213,11 +213,20 @@ def test_scope_settings(page: Page, server):
     page.select_option("#sc-span", "50000")
 
 
+def _audio_started(page: Page):
+    try:
+        expect(page.locator("#au-start")).to_have_text("Stop audio", timeout=10_000)
+    except AssertionError as e:
+        raise AssertionError(
+            f"audio did not start: {page.locator('#au-status').inner_text()}"
+        ) from e
+
+
 def test_listen_only_audio_plays(page: Page, server):
     login(page, server)
     page.select_option("#au-mode", "monitor")
     page.click("#au-start")
-    expect(page.locator("#au-start")).to_have_text("Stop audio", timeout=10_000)
+    _audio_started(page)
     # The player worklet reports its buffer once a second: receive audio is flowing.
     expect(page.locator("#au-status")).to_have_text(
         re.compile(r"Listening: buffer \d+ ms"), timeout=10_000
@@ -232,7 +241,7 @@ def test_microphone_to_radio_while_keyed(page: Page, server, browser_name):
     login(page, server)
     page.select_option("#au-mode", "remote")
     page.click("#au-start")
-    expect(page.locator("#au-start")).to_have_text("Stop audio", timeout=10_000)
+    _audio_started(page)
     expect(page.locator("#au-status")).to_have_text(
         re.compile(r"Mic and speaker on: buffer"), timeout=10_000
     )
