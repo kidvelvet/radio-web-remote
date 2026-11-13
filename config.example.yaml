@@ -33,6 +33,10 @@ server:
     port: 8080
   hostnames: []                    # extra DNS names for the certificate
   vpn_ips: []                      # VPN addresses clients use to reach this host
+  tls:
+    cert_file: null                # your own certificate (PEM); null = built-in local CA
+    key_file: null                 # its private key (PEM); set both or neither
+    server_cert_days: 397          # built-in CA only; Apple allows at most 825
 
 ptt:
   heartbeat_interval_s: 0.5        # how often the browser says "still here"

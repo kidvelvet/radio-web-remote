@@ -1,0 +1,46 @@
+"""In-memory sliding-window rate limit, per key (client address for logins).
+
+Complements the per-account lockout in users.py: lockout protects one
+account from many guesses; this protects the server from one address
+guessing many accounts.
+"""
+
+from __future__ import annotations
+
+import time
+from collections import deque
+from collections.abc import Callable
+
+
+class RateLimiter:
+    def __init__(
+        self, max_events: int, window_s: float, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self.max_events = max_events
+        self.window_s = window_s
+        self._clock = clock
+        self._events: dict[str, deque[float]] = {}
+
+    def _trim(self, key: str, now: float) -> deque[float]:
+        q = self._events.setdefault(key, deque())
+        while q and now - q[0] > self.window_s:
+            q.popleft()
+        return q
+
+    def allow(self, key: str) -> bool:
+        """Record an attempt; False if this key is over its limit."""
+        now = self._clock()
+        q = self._trim(key, now)
+        if len(q) >= self.max_events:
+            return False
+        q.append(now)
+        if len(self._events) > 10_000:  # bound memory under a flood of addresses
+            for k in [k for k, v in self._events.items() if not v][:5000]:
+                del self._events[k]
+        return True
+
+    def retry_after(self, key: str) -> int:
+        q = self._trim(key, self._clock())
+        if len(q) < self.max_events:
+            return 0
+        return int(self.window_s - (self._clock() - q[0])) + 1

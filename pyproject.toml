@@ -21,6 +21,8 @@ dependencies = [
     "pydantic>=2.14,<3",
     "pyyaml>=6.0.3,<7",
     "pyserial>=3.5,<4",
+    "cryptography>=50.0.2,<51",
+    "argon2-cffi>=25.1,<26",
 ]
 
 [project.scripts]

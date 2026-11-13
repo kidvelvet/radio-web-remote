@@ -64,6 +64,22 @@ class HttpRedirectConfig(_Strict):
     port: Annotated[int, Field(ge=1, le=65535)] = 8080
 
 
+class TlsConfig(_Strict):
+    """Leave cert_file/key_file empty to use the built-in local CA (created on first run)."""
+
+    cert_file: str | None = None
+    key_file: str | None = None
+    # Apple rejects TLS server certificates valid for more than 825 days
+    # (support.apple.com/en-us/103769). 397 leaves room under that.
+    server_cert_days: Annotated[int, Field(ge=30, le=825)] = 397
+
+    @model_validator(mode="after")
+    def _both_or_neither(self) -> TlsConfig:
+        if (self.cert_file is None) != (self.key_file is None):
+            raise ValueError("server.tls.cert_file and key_file must be set together")
+        return self
+
+
 class ServerConfig(_Strict):
     bind_address: str = "0.0.0.0"  # noqa: S104  (all interfaces is the documented default)
     https_port: Annotated[int, Field(ge=1, le=65535)] = 8473
@@ -71,6 +87,7 @@ class ServerConfig(_Strict):
     # Extra names and addresses to put in the server certificate's SANs.
     hostnames: list[str] = Field(default_factory=list)
     vpn_ips: list[IPv4Address | IPv6Address] = Field(default_factory=list)
+    tls: TlsConfig = Field(default_factory=TlsConfig)
 
 
 class PttConfig(_Strict):
