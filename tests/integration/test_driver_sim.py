@@ -153,8 +153,32 @@ async def test_silent_radio_times_out():
         await driver.unkey()  # verify loop gives up loudly
     payloads = [f.payload for f in sim.received]
     assert payloads[0] == b"\x1c\x00\x00"  # TX off first, even with no answers
-    assert payloads[1] == b"\x03"
+    assert payloads[1:3] == [b"\x03", b"\x03"]  # one retry on timeout
     # The unkey loop only ever sends TX off or reads TX state; never TX on.
-    assert all(p in (b"\x1c\x00\x00", b"\x1c\x00") for p in payloads[2:])
+    assert all(p in (b"\x1c\x00\x00", b"\x1c\x00") for p in payloads[3:])
     assert payloads.count(b"\x1c\x00\x00") >= 1 + 1 + 3  # connect, unkey, retries
     await host.close()
+
+
+def test_sim_drops_back_to_back_commands_like_the_ic7300():
+    # Regression for the first hardware probe (2026-11-13): TX off then a
+    # frequency read, written back to back, got only one answer.
+    sim = IcomSimulator(IC7300)
+    tx_off = bytes.fromhex("FEFE94E01C0000FD")
+    read = bytes.fromhex("FEFE94E003FD")
+    assert sim.handle_bytes(tx_off, now=10.0) == bytes.fromhex("FEFEE094FBFD")
+    assert sim.handle_bytes(read, now=10.001) == b""  # before the reply went out
+    assert [f.payload for f in sim.dropped] == [b"\x03"]
+    assert sim.handle_bytes(read, now=10.010) == bytes.fromhex("FEFEE09403" + "0040071400FD")
+
+
+async def test_driver_never_overlaps_commands(rig):
+    driver, sim, _ = rig
+    # A burst of concurrent callers, PTT in the middle of it.
+    jobs = [asyncio.create_task(driver.get_frequency()) for _ in range(5)]
+    jobs.append(asyncio.create_task(driver.key()))
+    jobs += [asyncio.create_task(driver.set_frequency(7_000_000 + i)) for i in range(5)]
+    jobs.append(asyncio.create_task(driver.unkey()))
+    await asyncio.gather(*jobs)
+    assert sim.dropped == []
+    assert sim.state.transmitting is False

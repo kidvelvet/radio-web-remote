@@ -24,6 +24,7 @@ ErrorCallback = Callable[[BaseException], None]
 
 
 class Priority(IntEnum):
+    URGENT = 0  # PTT
     CONTROL = 10  # user actions
     POLL = 20  # background state polling
     BULK = 30  # scope settings and other bulk traffic

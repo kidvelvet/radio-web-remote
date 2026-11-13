@@ -14,10 +14,12 @@ documents do not.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 
 from radio_web_remote.protocols.civ import commands as cmd
@@ -46,7 +48,13 @@ class IcomSimulator:
     echo_back: bool = False
     transceive: bool = True
     silent: bool = False  # answer nothing (timeout tests)
+    # Observed on an IC-7300 over USB (2026-11-13): the reply comes a few ms
+    # after the command, and a command arriving before that reply is sent
+    # goes unanswered. Runners deliver replies after reply_delay_s.
+    reply_delay_s: float = 0.003
+    drop_while_busy: bool = True
     state: SimState = field(default_factory=SimState)
+    dropped: list[Frame] = field(default_factory=list)
     received: list[Frame] = field(default_factory=list)
     tx_history: list[bool] = field(default_factory=list)
     parser: FrameParser = field(default_factory=FrameParser)
@@ -54,6 +62,7 @@ class IcomSimulator:
     def __post_init__(self) -> None:
         if self.address is None:
             self.address = self.model.default_address.value
+        self._busy_until = 0.0
 
     @property
     def addr(self) -> int:
@@ -61,12 +70,17 @@ class IcomSimulator:
         return self.address
 
     # -- I/O ------------------------------------------------------------
-    def handle_bytes(self, data: bytes) -> bytes:
+    def handle_bytes(self, data: bytes, now: float | None = None) -> bytes:
+        """Process incoming bytes at time `now` (monotonic seconds); return the reply bytes."""
+        now = time.monotonic() if now is None else now
         out = bytearray()
         for frame in self.parser.feed(data):
             if self.echo_back:
                 out += frame.encode()
             if frame.to_addr != self.addr:
+                continue
+            if self.drop_while_busy and now < self._busy_until:
+                self.dropped.append(frame)
                 continue
             self.received.append(frame)
             if self.silent:
@@ -74,6 +88,7 @@ class IcomSimulator:
             reply = self._handle(frame)
             if reply is not None:
                 out += encode_frame(frame.from_addr, self.addr, reply)
+                self._busy_until = now + self.reply_delay_s
         return bytes(out)
 
     # -- front panel (test hooks) ----------------------------------------
@@ -140,13 +155,16 @@ class IcomSimulator:
 def attach_loopback(sim: IcomSimulator, end: LoopbackEnd) -> None:
     """Make the simulator answer on one end of a loopback pair (end must be opened)."""
 
+    def deliver(reply: bytes) -> None:
+        # Write directly, not through the queue, like a real UART would.
+        peer = end.peer
+        if end.is_open and peer is not None and peer.is_open:
+            peer._deliver(reply)
+
     def on_data(data: bytes) -> None:
-        reply = sim.handle_bytes(data)
-        if reply and end.is_open:
-            # Write directly, not through the queue, like a real UART would.
-            peer = end.peer
-            if peer is not None and peer.is_open:
-                peer._deliver(reply)
+        reply = sim.handle_bytes(data, time.monotonic())
+        if reply:
+            asyncio.get_running_loop().call_later(sim.reply_delay_s, deliver, reply)
 
     end.on_data = on_data
 
@@ -197,8 +215,9 @@ class PtyRunner:
                 return
             if data:
                 with self._lock:
-                    reply = self.sim.handle_bytes(data)
+                    reply = self.sim.handle_bytes(data, time.monotonic())
                 if reply:
+                    time.sleep(self.sim.reply_delay_s)
                     self.inject(reply)
 
     def stop(self) -> None:

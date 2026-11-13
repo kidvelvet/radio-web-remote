@@ -1,21 +1,30 @@
 """RadioDriver for Icom radios over CI-V, driven by a model capability table.
 
-Request/response: one request is outstanding at a time (CI-V is a shared
-half-duplex bus by design). A read is answered by a frame with the same
-command prefix; a set is answered by FB (OK) or FA (NG). Frames from the
-radio that do not answer the outstanding request are unsolicited
-(transceive) and become StateEvents.
+One command on the wire at a time. Every command, PTT included, waits for
+its reply (a frame with the same command prefix for reads, FB/FA for sets)
+or a timeout before the next is written. Observed on an IC-7300 over USB
+(2026-11-13): when two commands arrive back to back the radio answers only
+one of them; with a gap of 2 ms or more it answers both.
 
-PTT never waits for the request lock. Both key and unkey go out through the
-transport's urgent path, in call order, and each bumps or checks a PTT
-generation counter so a key request overtaken by an unkey is dropped.
+The bus is a PriorityLock: PTT requests are first in line, ahead of every
+waiting command, but wait for the one command already in flight (normally a
+few ms). If that in-flight command is stuck, unkey stops waiting after
+UNKEY_BUS_WAIT_S and writes TX off anyway; the read-back then confirms it.
+
+A PTT generation counter makes a key request that was overtaken by an
+unkey cancel itself instead of keying after the unkey.
+
+Frames from the radio that do not answer the in-flight command are
+unsolicited (transceive) and become StateEvents.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
+from radio_web_remote.asyncutil import PriorityLock
 from radio_web_remote.protocols.civ import commands as cmd
 from radio_web_remote.protocols.civ.commands import CivCommand, ReplyError
 from radio_web_remote.protocols.civ.frame import Frame, FrameParser, encode_frame
@@ -39,6 +48,8 @@ DEFAULT_CONTROLLER = 0xE0
 # or to the controller. Accept both until confirmed on hardware.
 BROADCAST = 0x00
 UNKEY_RETRIES = 3
+UNKEY_BUS_WAIT_S = 0.05
+COMMAND_RETRIES = 1  # resend once on timeout; every command we send is idempotent
 
 
 class _Pending:
@@ -75,7 +86,7 @@ class IcomCivDriver(RadioDriver):
         self.timeout = response_timeout_s
         self.parser = FrameParser()
         self.echoes_seen = 0
-        self._req_lock = asyncio.Lock()
+        self._bus = PriorityLock()
         self._pending: _Pending | None = None
         self._ptt_generation = 0
 
@@ -140,6 +151,24 @@ class IcomCivDriver(RadioDriver):
         except (ReplyError, ValueError) as exc:
             log.debug("ignoring unsolicited frame %r: %s", frame, exc)
 
+    async def _exchange(self, command: CivCommand, payload: bytes, expect_reply: bool) -> Frame:
+        """Write one frame and wait for its answer. Caller must hold the bus."""
+        fut: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
+        self._pending = _Pending(command.prefix if expect_reply else None, fut)
+        try:
+            await self.transport.send_urgent(self._frame(payload))
+            try:
+                reply = await asyncio.wait_for(fut, self.timeout)
+            except TimeoutError:
+                raise RadioTimeout(
+                    f"{self.model.name} did not answer {command.name} within {self.timeout}s"
+                ) from None
+        finally:
+            self._pending = None
+        if reply.is_ng:
+            raise RadioRejected(f"{self.model.name} rejected {command.name} ({payload.hex(' ')})")
+        return reply
+
     async def _transact(
         self,
         command: CivCommand,
@@ -148,22 +177,15 @@ class IcomCivDriver(RadioDriver):
         priority: Priority = Priority.CONTROL,
     ) -> Frame:
         self._require(command)
-        async with self._req_lock:
-            fut: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
-            self._pending = _Pending(command.prefix if expect_reply else None, fut)
-            try:
-                await self.transport.send(self._frame(payload), priority)
+        for attempt in range(COMMAND_RETRIES + 1):
+            async with self._bus.acquire(priority):
                 try:
-                    reply = await asyncio.wait_for(fut, self.timeout)
-                except TimeoutError:
-                    raise RadioTimeout(
-                        f"{self.model.name} did not answer {command.name} within {self.timeout}s"
-                    ) from None
-            finally:
-                self._pending = None
-        if reply.is_ng:
-            raise RadioRejected(f"{self.model.name} rejected {command.name} ({payload.hex(' ')})")
-        return reply
+                    return await self._exchange(command, payload, expect_reply)
+                except RadioTimeout:
+                    if attempt == COMMAND_RETRIES:
+                        raise
+                    log.debug("%s timed out, retrying", command.name)
+        raise AssertionError("unreachable")
 
     def _require(self, command: CivCommand) -> None:
         if not self.model.supports(command):
@@ -204,23 +226,35 @@ class IcomCivDriver(RadioDriver):
 
     # -- PTT -------------------------------------------------------------
     async def get_ptt(self) -> bool:
-        reply = await self._transact(CivCommand.TX_STATE, cmd.read_tx_state(), True)
+        reply = await self._transact(
+            CivCommand.TX_STATE, cmd.read_tx_state(), True, priority=Priority.URGENT
+        )
         return cmd.parse_tx_state(reply.payload)
 
     async def key(self) -> bool:
+        """Key the transmitter. Returns False if an unkey overtook this request."""
         self._require(CivCommand.TX_STATE)
         generation = self._ptt_generation
-        return await self.transport.send_urgent(
-            self._frame(cmd.set_tx_state(True)),
-            guard=lambda: self._ptt_generation == generation,
-        )
+        async with self._bus.acquire(Priority.URGENT):
+            if self._ptt_generation != generation:
+                return False
+            await self._exchange(CivCommand.TX_STATE, cmd.set_tx_state(True), False)
+        return True
 
     async def unkey(self, verify: bool = True) -> None:
-        """Send TX off ahead of all queued traffic; optionally confirm by reading back."""
+        """Send TX off first in line; with verify, read back until the radio reports RX."""
         self._require(CivCommand.TX_STATE)
         self._ptt_generation += 1
-        frame = self._frame(cmd.set_tx_state(False))
-        await self.transport.send_urgent(frame)
+        payload = cmd.set_tx_state(False)
+        try:
+            async with self._bus.acquire(Priority.URGENT, wait_s=UNKEY_BUS_WAIT_S):
+                # A missing FB is handled by the read-back below.
+                with contextlib.suppress(RadioTimeout):
+                    await self._exchange(CivCommand.TX_STATE, payload, False)
+        except TimeoutError:
+            # The command in flight is stuck. Do not wait for it: send TX off now.
+            log.warning("bus busy for %.0f ms; sending TX off anyway", UNKEY_BUS_WAIT_S * 1000)
+            await self.transport.send_urgent(self._frame(payload))
         if not verify:
             return
         for _ in range(UNKEY_RETRIES):
@@ -229,5 +263,7 @@ class IcomCivDriver(RadioDriver):
                     return
             except RadioTimeout:
                 pass
-            await self.transport.send_urgent(frame)
+            async with self._bus.acquire(Priority.URGENT):
+                with contextlib.suppress(RadioTimeout):
+                    await self._exchange(CivCommand.TX_STATE, payload, False)
         raise RadioTimeout(f"{self.model.name} did not confirm RX after {UNKEY_RETRIES} retries")
