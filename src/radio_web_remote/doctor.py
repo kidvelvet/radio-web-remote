@@ -147,6 +147,8 @@ def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
 
     try:
         store = UserStore(db)
+        if damage := store.integrity_problem():  # as serve checks at start
+            raise sqlite3.DatabaseError(damage)
         users, admins = store.list_users(), store.count_admins()
     except (sqlite3.Error, OSError) as exc:
         report.add(
@@ -172,15 +174,16 @@ def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
             report.add("ok", t, f"using your own certificate {cfg.server.tls.cert_file}")
         return
     d = tls_dir(data_dir)
+    if ca_problem := local_ca_problem(d):  # serve refuses to start with this
+        report.add("fail", t, *ca_problem)
+        return
     sans = wanted_sans(cfg)
     reason = needs_new_server_cert(d / "server.crt", sans)
     if reason:
         report.add("warn", t, f"server certificate will be re-issued at start: {reason}")
     else:
         report.add("ok", t, f"server certificate covers {sans.describe()}")
-    if ca_problem := local_ca_problem(d):  # serve refuses to start with this
-        report.add("fail", t, ca_problem)
-    elif (d / "ca.crt").exists():
+    if (d / "ca.crt").exists():
         missing = uncovered_by_ca(d / "ca.crt", sans)
         if missing:
             report.add(

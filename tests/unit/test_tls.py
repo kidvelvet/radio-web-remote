@@ -246,7 +246,7 @@ def test_ca_gone_but_its_server_certificate_left_is_not_replaced_silently(tmp_pa
     tls.ensure_certificates(cfg, tmp_path)
     d = tls.tls_dir(tmp_path)
     (d / "ca.key").unlink()
-    with pytest.raises(ConfigError, match=r"ca\.key is missing; restore it from a backup"):
+    with pytest.raises(ConfigError, match=r"ca\.key is missing\. Restore it from a backup"):
         tls.ensure_certificates(cfg, tmp_path)
     (d / "ca.crt").unlink()
     with pytest.raises(ConfigError, match="is missing from"):

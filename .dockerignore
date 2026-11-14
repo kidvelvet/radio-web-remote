@@ -5,11 +5,17 @@
 .pytest_cache
 .mypy_cache
 .ruff_cache
+.hypothesis
+dist
 tests
 tools
 docs
-*.pem
-*.key
+# Keys and certificates anywhere in the tree (COPY keeps them in a layer).
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/certs
 # Never bake state into an image: the compose example keeps it in packaging/docker/data
 packaging/docker/data
 **/users.db

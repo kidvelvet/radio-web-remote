@@ -464,7 +464,10 @@ class Hub:
                     # or a logout must still be read and cancel it meanwhile.
                     conn.press_waiting = True
                     conn.press_msg = msg
-                    conn.press = asyncio.create_task(self._press(conn, station, msg))
+                    # Whether earlier controls are pending is decided now: controls
+                    # read after this press (same burst) must not delay its key.
+                    wait = not conn.control.idle.is_set()
+                    conn.press = asyncio.create_task(self._press(conn, station, msg, wait))
                     conn.press.add_done_callback(functools.partial(self._helper_done, conn))
                     continue
                 if kind == "ptt" or (kind == "visibility" and msg.get("hidden") is True):
@@ -473,9 +476,12 @@ class Hub:
             elif not conn.control.put(msg):
                 conn.push({"type": "error", "code": "busy", "message": "too many pending controls"})
 
-    async def _press(self, conn: _Conn, station: RadioStation, msg: dict[str, Any]) -> None:
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(conn.control.idle.wait(), PTT_WAITS_FOR_CONTROLS_S)
+    async def _press(
+        self, conn: _Conn, station: RadioStation, msg: dict[str, Any], wait: bool
+    ) -> None:
+        if wait:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(conn.control.idle.wait(), PTT_WAITS_FOR_CONTROLS_S)
 
         def committed() -> None:  # from here on it keys: never cancelled
             conn.press_waiting = False

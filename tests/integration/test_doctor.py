@@ -179,3 +179,18 @@ def test_broken_local_ca_is_a_doctor_failure(tmp_path):
     report = doctor.Report()
     doctor.check_data(report, Config(), tmp_path)
     assert any(f.level == "fail" and "local CA" in f.text for f in report.findings)
+
+
+def test_doctor_lists_ca_and_database_damage_under_what_to_fix(tmp_path):
+    """Review E6-1, C6-3: a FAIL with nothing in "What to fix" read as healthy."""
+    from radio_web_remote.security import tls
+    from radio_web_remote.security.users import UserStore
+
+    UserStore(tmp_path / "users.db")
+    tls.ensure_certificates(Config(), tmp_path)
+    (tls.tls_dir(tmp_path) / "ca.key").unlink()
+    report = doctor.Report()
+    doctor.check_data(report, Config(), tmp_path)
+    text = report.render()
+    assert "Nothing to fix" not in text and "Restore it from a backup" in text
+    assert not any("re-issued" in f.text for f in report.findings)

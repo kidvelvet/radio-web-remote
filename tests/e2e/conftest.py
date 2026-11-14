@@ -23,14 +23,15 @@ def _free_port() -> int:
 
 
 def _cli(*args: str, stdin: str | None = None) -> None:
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-m", "radio_web_remote", *args],
         input=stdin,
         text=True,
-        check=True,
         capture_output=True,
         timeout=120,
     )
+    if result.returncode != 0:  # show why, not just the exit status
+        raise RuntimeError(f"{args[0]} exited {result.returncode}: {result.stderr}")
 
 
 @pytest.fixture(scope="session")

@@ -48,7 +48,7 @@ const STOP_TEXT = {
 
 const app = {
   me: null, ws: null, hello: null, state: null, retry: 500,
-  heartbeat: null, ptt: false, pressed: false, serverStop: false, pressId: 0, onAir: false, dragging: false, activeLevel: null,
+  heartbeat: null, ptt: false, pressed: false, serverStop: false, pressId: 0, onAir: false, staleSince: null, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
   scope: null, scopeOn: false,
   audio: null, audioMode: null, rxStats: null, txLevel: null,
@@ -108,7 +108,7 @@ function connect() {
     if (msg.type === "hello") onHello(msg);
     else if (msg.type === "state") render(msg.state);
     else if (msg.type === "error") onError(msg);
-    else if (msg.type === "tx_level") { app.txLevel = msg.peak_dbfs; if (app.state) renderTx(app.state, app.state); }
+    else if (msg.type === "tx_level") { app.txLevel = msg.peak_dbfs; if (app.state) renderTx(app.state); }
   };
   ws.onclose = (ev) => {
     stopHeartbeat();
@@ -223,12 +223,15 @@ function render(s) {
   renderScopeSettings(s.scope, s);
   const listener = app.hello && !app.hello.may_transmit && app.hello.user.role === "listener";
   document.querySelectorAll("#scope-controls select, #sc-hold").forEach((el) => { el.disabled = !!listener; });
-  renderTx(s, prev);
+  renderTx(s);
 }
 
-function renderTx(s, prev) {
+function renderTx(s) {
   const tx = s.tx || {};
-  const mine = tx.transmitting && app.ptt && app.hello && tx.holder === app.hello.user.callsign;
+  // Ours: this press's TX, not one already on air when it was sent (another tab
+  // of the same account, or our own earlier press the server is stopping).
+  const mine = tx.transmitting && app.ptt && tx.since !== app.staleSince
+    && app.hello && tx.holder === app.hello.user.callsign;
   const bar = $("txbar");
   if (tx.unconfirmed) {
     bar.dataset.state = "danger";
@@ -309,7 +312,11 @@ function setPtt(down) {
   }
   app.pressed = down;
   localPtt(down);
-  if (down) send({ type: "ptt", down, press: ++app.pressId });
+  if (down) {
+    app.onAir = false;
+    app.staleSince = app.state?.tx?.transmitting ? app.state.tx.since : null;
+    send({ type: "ptt", down, press: ++app.pressId });
+  }
   else send({ type: "ptt", down });
 }
 

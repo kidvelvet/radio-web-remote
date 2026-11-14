@@ -173,7 +173,8 @@ class RadioDriver(ABC):
     async def unkey(self, verify: bool = True) -> bool:
         """Stop transmitting, ahead of all queued traffic; with verify, confirm RX or raise.
 
-        Returns False if a newer key or unkey took over before RX was confirmed."""
+        Returns False only if a newer key took over before RX was confirmed (a
+        newer unkey wants the same thing, so it keeps confirming)."""
 
     # Optional controls: drivers override what their documents support.
     async def get_level(self, level: Level) -> int:

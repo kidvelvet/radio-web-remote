@@ -297,37 +297,47 @@ def _pair_problem(cert_file: Path, key_file: Path) -> str | None:
     """Why this certificate and key cannot be used together, or None."""
     try:
         cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
+    except PermissionError:
+        return f"{cert_file} is {NOT_READABLE}"
+    except (OSError, ValueError) as exc:
+        return f"{cert_file} is unreadable ({exc})"
+    try:
         key = serialization.load_pem_private_key(key_file.read_bytes(), password=None)
     except PermissionError:
-        return "not readable by this account (check the files' owner)"
+        return f"{key_file} is {NOT_READABLE}"
     except (OSError, ValueError) as exc:
-        return f"unreadable ({exc})"
+        return f"{key_file} is unreadable ({exc})"
     except TypeError:  # cryptography: the key is encrypted
-        return "key is encrypted with a passphrase (not supported)"
+        return f"{key_file} is encrypted with a passphrase (not supported)"
     pub = serialization.PublicFormat.SubjectPublicKeyInfo
     if cert.public_key().public_bytes(
         serialization.Encoding.DER, pub
     ) != key.public_key().public_bytes(serialization.Encoding.DER, pub):
-        return "key does not match the certificate"
+        return f"{key_file} does not match {cert_file}"
     return None
 
 
-def local_ca_problem(d: Path) -> str | None:
-    """Why the local CA in this tls folder cannot be used, or None (also when
-    there is none yet and nothing it issued: the first run makes one)."""
+NOT_READABLE = "not readable by this account"
+
+
+def local_ca_problem(d: Path) -> tuple[str, str] | None:
+    """Why the local CA in this tls folder cannot be used, and what to do; None
+    also when there is none yet and nothing it issued (the first run makes one)."""
     reset = (
-        "restore it from a backup, or run 'radio-web-remote cert reset' "
-        "(every device must then install the new CA from /setup)"
+        "Restore it from a backup, or run `radio-web-remote cert reset` "
+        "(every device must then install the new CA from /setup)."
     )
     have = {n: (d / n).exists() for n in ("ca.crt", "ca.key")}
     if not any(have.values()):
         if (d / "server.crt").exists():
-            return f"the local CA (ca.crt and ca.key) is missing from {d}; {reset}"
+            return f"the local CA (ca.crt and ca.key) is missing from {d}", reset
         return None
     if missing := [n for n, ok in have.items() if not ok]:
-        return f"local CA file {d / missing[0]} is missing; {reset}"
+        return f"local CA file {d / missing[0]} is missing", reset
     if problem := _pair_problem(d / "ca.crt", d / "ca.key"):
-        return f"local CA in {d}: {problem}; {reset}"
+        if NOT_READABLE in problem:  # the CA is fine: give the file back
+            return f"local CA: {problem}", "Make this account its owner again (chown)."
+        return f"local CA: {problem}", reset
     return None
 
 
@@ -362,9 +372,9 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
     d = tls_dir(data_dir)
     changed: list[str] = []
     sans = wanted_sans(cfg)
-    if problem := local_ca_problem(d):
+    if found := local_ca_problem(d):
         # Not repaired silently: a new CA means every device must install it again.
-        raise ConfigError(problem)
+        raise ConfigError(f"{found[0]}. {found[1]}")
     if not (d / "ca.crt").exists():
         create_ca(d, cfg.site.club_name, sans)
         changed.append("created local CA")

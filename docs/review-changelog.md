@@ -500,3 +500,74 @@ fix; (P) = confirmed with the reviewer's browser probe.
   backup before `cert reset`; an unreadable file says to check its owner.
 - E5-3: the e2e fixture shows the server log when the server does not start,
   and stops it.
+
+### Round 6 (2026-11-14): 161 lines changed of 9,495 = 1.7%: stop
+
+Five fresh reviewers. 16 findings: 15 fixed, 1 documented (D6-2). Under 2%,
+so the review ends here. (T) = regression test added, failing before the
+fix; (P) = confirmed with the reviewer's browser probe.
+
+**PTT and transmit safety**
+
+- D6-1 (P): round 5's "our own transmission" test trusted any transmission
+  shown under our callsign, so another tab of the same account, or our own
+  earlier transmission being stopped, could still drop a press the server
+  then keyed. A transmission already on air when a press is sent is no
+  longer counted as that press's.
+- A6-1 (T): a command that took the bus between unkey's read-backs and lost
+  its reply pushed the confirmation past its window (radio on air about
+  0.77 s, then a false alarm). Every step of the confirmation now overtakes a
+  stuck command.
+- A6-2 (T): a lost TX off was resent at about 0.36 s instead of 0.15 s; the
+  resend interval now counts from the write.
+- B6-1: a TX-off retry could still start in the loop pass between a press's
+  wait for an earlier TX off and its key. No retry starts from the moment a
+  press takes the key lock until it has keyed.
+- C6-1 (T): since every press became a task (round 5), a control read in the
+  same burst after a press was waited for, and could run first (a band
+  change before the key). Whether a press waits is now decided when it
+  arrives.
+
+**Web server and security**
+
+- C6-2: a flushed per-address count that the global cap suppressed added 1,
+  not its count.
+- C6-3, E6-1 (T): doctor now runs the same database check as `serve`, puts a
+  local-CA failure under "What to fix" (it printed "Nothing to fix." under a
+  FAIL), and checks the CA before saying the server certificate "will be
+  re-issued".
+- C6-4, E6-2 (T): a CA file this account cannot read is named and gets only
+  the ownership advice; `cert reset` there would replace a good CA. Every
+  certificate message names the file at fault.
+- A6-3: the driver interface's unkey description matches what it does.
+
+**Setup and tooling**
+
+- E6-3: .dockerignore now keeps keys and certificates out of the image at any
+  depth (`**/*.key`, `**/*.pem`, `**/*.p12`, `**/*.pfx`, `**/certs`), and the
+  build cache no longer depends on `dist/` and `.hypothesis/`.
+- E6-4: the e2e setup shows why a setup command failed, and CI uploads the
+  test server's log when the browser tests fail.
+- D6-3: an unused parameter removed.
+
+**Documented (D6-2)**: if the link stalls right after a press for longer than
+the heartbeat timeout, the page can receive only the final "stopped" state
+and keep its button shown as pressed with no reason. Nothing is transmitted
+(the server stopped it); the next tap releases. Fixing it needs the server to
+say whose transmission stopped.
+
+## Summary
+
+| Round | Base lines | Changed | Share | Findings fixed |
+|---|---|---|---|---|
+| 1 | 8,280 | 1,128 | 13.6% | 58 |
+| 2 | 8,813 | 719 | 8.2% | 40 |
+| 3 | 9,161 | 359 | 3.9% | 35 |
+| 4 | 9,324 | 212 | 2.3% | 23 |
+| 5 | 9,443 | 201 | 2.1% | 13 |
+| 6 | 9,495 | 161 | 1.7% | 15 |
+
+184 findings fixed in six rounds; the deferred items are listed in each
+round. Every fix was checked against the code before it was made, and the
+full unit suite (366 tests) and browser suite (Chromium, Firefox, WebKit)
+pass.

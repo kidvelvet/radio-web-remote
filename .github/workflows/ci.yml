@@ -96,7 +96,13 @@ jobs:
           pactl set-default-sink ci_null
 
       - name: Browser tests
-        run: uv run pytest -m e2e --browser chromium --browser firefox --browser webkit -o faulthandler_timeout=120
+        run: uv run pytest -m e2e --browser chromium --browser firefox --browser webkit -o faulthandler_timeout=120 --basetemp=e2e-tmp
+      - name: Server log of the browser tests
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: e2e-server-log
+          path: e2e-tmp/**/server.log
 
   install:
     # The member's path: the one-line install script, then a smoke test of

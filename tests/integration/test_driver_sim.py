@@ -492,3 +492,58 @@ async def test_overtaken_command_retries_after_the_tx_off(rig):
     assert loop.time() - t0 < 0.3
     with contextlib.suppress(Exception):
         await poll
+
+
+# -- review round 6 ------------------------------------------------------------
+
+
+async def test_lost_tx_off_is_resent_one_interval_after_the_write(rig):
+    """Review A6-2: the resend interval counts from the write, not from after
+    the wait for the acknowledgement that never came."""
+    driver, sim, _ = rig
+    driver.timeout = 0.5
+    await driver.key()
+    real = sim._handle
+    left = {"n": 1}
+
+    def miss_first_tx_off(frame, now):
+        if left["n"] and frame.payload == b"\x1c\x00\x00":
+            left["n"] -= 1
+            return None  # the radio missed it and stays on the air
+        return real(frame, now)
+
+    sim._handle = miss_first_tx_off
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    assert await driver.unkey() is True
+    assert loop.time() - t0 < 0.33
+
+
+async def test_command_stuck_between_read_backs_is_overtaken(rig):
+    """Review A6-1: a command that takes the bus between read-backs and loses its
+    reply must not push the confirmation past its window."""
+    driver, sim, _ = rig
+    driver.timeout = 0.5
+    await driver.key()
+    real = sim._handle
+    left = {"off": 1, "poll": 1}
+
+    def handle(frame, now):
+        if left["off"] and frame.payload == b"\x1c\x00\x00":
+            left["off"] -= 1
+            return None
+        if left["poll"] and frame.payload == b"\x03":
+            left["poll"] -= 1
+            return None
+        return real(frame, now)
+
+    sim._handle = handle
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    unkey = asyncio.create_task(driver.unkey())
+    await asyncio.sleep(0.03)  # between read-backs
+    poll = asyncio.create_task(driver.get_frequency())
+    assert await unkey is True
+    assert loop.time() - t0 < 0.5
+    with contextlib.suppress(Exception):
+        await poll

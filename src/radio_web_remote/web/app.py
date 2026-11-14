@@ -163,9 +163,8 @@ def create_app(
         flush_caps(minute)
         cap = caps.setdefault(event, {"minute": minute, "count": 0, "suppressed": 0})
         if cap["count"] >= AUDIT_CAP_PER_MIN:
-            cap["suppressed"] += 1 + int(
-                fields.get("suppressed", 0)
-            )  # with a throttled key's own count
+            # With a throttled key's own count, or the count a flushed line carried.
+            cap["suppressed"] += 1 + int(fields.get("suppressed", 0)) + int(fields.get("count", 0))
             return
         cap["count"] += 1
         audit_event(event, **fields)

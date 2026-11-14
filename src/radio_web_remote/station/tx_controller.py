@@ -240,29 +240,30 @@ class TxController:
         if self._closed:
             raise TxDenied(DenyReason.RADIO_ERROR, "the station is shutting down")
         async with self._key_lock:
-            # A TX off still on its way must reach the radio before this key:
-            # otherwise it lands after TX on and unkeys the new holder.
-            if self._unkey_tasks:
-                # asyncio.wait, not gather: cancelling this caller must not cancel
-                # another operator's TX off.
-                await asyncio.wait(list(self._unkey_tasks))
-            holder = self._holder
-            if holder is not None:
-                if holder.session_id == op.session_id:
-                    self._last_heartbeat = self._clock()
-                    return  # already holding; a repeated press is a heartbeat
-                raise TxDenied(DenyReason.HELD_BY_OTHER, holder.callsign)
-            # No TX-off retry may start during this read: its TX off could land
-            # after this press's key (the holder is set synchronously after it).
+            # No TX-off retry may start from here until this press has keyed: its
+            # TX off could land after the key (the holder is set right after this).
             self._pressing = True
             try:
-                hz = await self._read_tx_hz()
-            except RadioError as exc:
-                if op.limits.bands_hz is not None:  # the limit check needs it
-                    raise TxDenied(
-                        DenyReason.RADIO_ERROR, f"could not read the transmit frequency: {exc}"
-                    ) from exc
-                hz = self._frequency()  # no band limits: the displayed one is fine for the log
+                # A TX off still on its way must reach the radio before this key:
+                # otherwise it lands after TX on and unkeys the new holder.
+                if self._unkey_tasks:
+                    # asyncio.wait, not gather: cancelling this caller must not cancel
+                    # another operator's TX off.
+                    await asyncio.wait(list(self._unkey_tasks))
+                holder = self._holder
+                if holder is not None:
+                    if holder.session_id == op.session_id:
+                        self._last_heartbeat = self._clock()
+                        return  # already holding; a repeated press is a heartbeat
+                    raise TxDenied(DenyReason.HELD_BY_OTHER, holder.callsign)
+                try:
+                    hz = await self._read_tx_hz()
+                except RadioError as exc:
+                    if op.limits.bands_hz is not None:  # the limit check needs it
+                        raise TxDenied(
+                            DenyReason.RADIO_ERROR, f"could not read the transmit frequency: {exc}"
+                        ) from exc
+                    hz = self._frequency()  # no band limits: the displayed one is fine for the log
             finally:
                 self._pressing = False
             if not op.limits.allows_frequency(hz):

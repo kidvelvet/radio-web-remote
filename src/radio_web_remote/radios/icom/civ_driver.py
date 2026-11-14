@@ -25,7 +25,7 @@ import contextlib
 import functools
 import itertools
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, ClassVar, TypeVar
 
 from radio_web_remote.asyncutil import PriorityLock
@@ -606,11 +606,22 @@ class IcomCivDriver(RadioDriver):
             if stuck is not None and not stuck.future.done():
                 stuck.future.set_exception(_Overtaken(f"{self.model.name}: overtaken by TX off"))
 
-        timer = loop.call_later(UNKEY_BUS_WAIT_S, fail_stuck)
-        try:
-            # Queued once, so nothing that queues meanwhile goes ahead of it.
-            async with self._bus.acquire(Priority.URGENT, wait_s=2 * UNKEY_BUS_WAIT_S):
+        @contextlib.asynccontextmanager
+        async def urgent_bus(wait_s: float | None = None) -> AsyncIterator[None]:
+            # First in line, queued once (nothing that queues meanwhile goes ahead),
+            # and a command stuck on the bus is failed: every step of the
+            # confirmation, not just the first TX off.
+            timer = loop.call_later(UNKEY_BUS_WAIT_S, fail_stuck)
+            try:
+                async with self._bus.acquire(Priority.URGENT, wait_s=wait_s):
+                    timer.cancel()
+                    yield
+            finally:
                 timer.cancel()
+
+        last_send = loop.time()  # resends count from the write, not from its FB wait
+        try:
+            async with urgent_bus(2 * UNKEY_BUS_WAIT_S):
                 # A missing FB, an FA (possibly a late one for an earlier command)
                 # or a link error: the read-back below decides, and resends. Its
                 # FB is not waited for longer than a resend interval.
@@ -622,17 +633,14 @@ class IcomCivDriver(RadioDriver):
             self._pending = None
             with contextlib.suppress(OSError):
                 await self.transport.send_urgent(self._frame(payload))
-        finally:
-            timer.cancel()
         if not verify:
             return True
-        last_send = loop.time()
         while loop.time() < deadline:
             if keyed_since():
                 return False  # a newer key owns the PTT state now
             # One attempt per read, within the budget. A malformed reply is another miss.
             with contextlib.suppress(RadioError, ReplyError):
-                async with self._bus.acquire(Priority.URGENT):
+                async with urgent_bus():
                     reply = await self._exchange(
                         CivCommand.TX_STATE,
                         cmd.read_tx_state(),
@@ -642,16 +650,16 @@ class IcomCivDriver(RadioDriver):
                 if not cmd.parse_tx_state(reply.payload):
                     return True
             if loop.time() - last_send >= UNKEY_RESEND_S:
-                async with self._bus.acquire(Priority.URGENT):
+                async with urgent_bus():
                     # Checked while holding the bus: a key cannot slip in between
                     # this check and the resend, which would unkey it.
                     if keyed_since():
                         return False
+                    last_send = loop.time()
                     with contextlib.suppress(RadioError):
                         await self._exchange(
                             CivCommand.TX_STATE, payload, False, wait_s=budget(UNKEY_RESEND_S)
                         )
-                last_send = loop.time()
             await asyncio.sleep(UNKEY_POLL_S)
         raise RadioTimeout(
             f"{self.model.name} did not report RX within {UNKEY_CONFIRM_S}s of TX off"

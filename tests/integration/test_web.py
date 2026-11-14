@@ -847,3 +847,87 @@ def test_release_during_the_transmit_frequency_read_never_keys(env):
         ws.send_json({"type": "heartbeat"})
         time.sleep(1.0)
         assert True not in sim.tx_history[len(before) :]
+
+
+async def test_control_sent_after_a_press_does_not_delay_its_key():
+    """Review C6-1: only controls sent before a press are waited for. uvicorn's
+    receive() does not yield while messages are buffered, so a whole burst is
+    read before the press task first runs (the test client yields, so a queue
+    stands in for the socket here)."""
+    import asyncio
+
+    from starlette.websockets import WebSocketState
+
+    from radio_web_remote.config import PttConfig
+    from radio_web_remote.station.tx_controller import TxLimits
+    from radio_web_remote.web.hub import Hub
+
+    order: list[str] = []
+
+    class FakeWS:
+        def __init__(self) -> None:
+            self.q: asyncio.Queue = asyncio.Queue()
+            self.client_state = self.application_state = WebSocketState.CONNECTED
+
+        async def receive(self):
+            return await self.q.get()
+
+        async def send_text(self, _t):
+            pass
+
+        async def send_bytes(self, _b):
+            pass
+
+        async def close(self, code=1000):
+            self.client_state = WebSocketState.DISCONNECTED
+
+    class FakeTx:
+        status = type("S", (), {"transmitting": False, "holder_session": None})()
+
+        async def ptt_down(self, op, on_commit=None):
+            order.append("key")
+
+        async def ptt_up(self, op):
+            pass
+
+        def heartbeat(self, op):
+            pass
+
+        async def client_gone(self, sid, reason):
+            pass
+
+    class FakeStation:
+        tx = FakeTx()
+        audio = type("A", (), {"remove": lambda self, s: None})()
+        state = type("St", (), {"to_json": lambda self: {}})()
+
+        async def set_level(self, op, level, value):
+            order.append("level")
+            await asyncio.sleep(0.3)
+
+        async def set_scope_demand(self, w):
+            pass
+
+    user = type(
+        "U",
+        (),
+        {"username": "a", "callsign": "N0CALL", "role": Role.OPERATOR, "limits": TxLimits()},
+    )()
+    sess = type("S", (), {"user": user, "public_id": "p1"})()
+    ws = FakeWS()
+
+    async def revalidate(_ws):
+        return sess
+
+    hub = Hub({"r": FakeStation()}, PttConfig())
+    task = asyncio.create_task(hub.serve(ws, sess, "r", revalidate))
+    await asyncio.sleep(0.05)  # connected and idle
+    for m in (  # one burst
+        {"type": "ptt", "down": True, "press": 1},
+        {"type": "set_level", "level": "af", "value": 9},
+    ):
+        ws.q.put_nowait({"type": "websocket.receive", "text": json.dumps(m)})
+    await asyncio.sleep(0.1)
+    ws.q.put_nowait({"type": "websocket.disconnect", "code": 1000})
+    await task
+    assert order[:2] == ["key", "level"]
