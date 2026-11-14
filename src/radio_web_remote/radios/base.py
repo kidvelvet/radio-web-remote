@@ -119,6 +119,10 @@ class RadioRejected(RadioError):
     """The radio answered NG (or the vendor equivalent)."""
 
 
+class RadioBadReply(RadioError):
+    """The radio answered, but not in the form the documents describe."""
+
+
 class Unsupported(RadioError):
     """The driver's capability table does not document this feature."""
 

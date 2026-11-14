@@ -11,6 +11,9 @@ import time
 from collections import deque
 from collections.abc import Callable
 
+MAX_KEYS = 10_000
+SWEEP_EVERY_S = 5.0
+
 
 class RateLimiter:
     def __init__(
@@ -20,6 +23,7 @@ class RateLimiter:
         self.window_s = window_s
         self._clock = clock
         self._events: dict[str, deque[float]] = {}
+        self._next_sweep = 0.0
 
     def _trim(self, key: str, now: float) -> deque[float]:
         q = self._events.setdefault(key, deque())
@@ -34,10 +38,14 @@ class RateLimiter:
         if len(q) >= self.max_events:
             return False
         q.append(now)
-        if len(self._events) > 10_000:  # bound memory under a flood of addresses
+        if len(self._events) > MAX_KEYS and now >= self._next_sweep:
+            # Bound memory under a flood of addresses, without rescanning on every call.
+            self._next_sweep = now + SWEEP_EVERY_S
             for k in list(self._events):
                 if not self._trim(k, now):
                     del self._events[k]
+            while len(self._events) > MAX_KEYS:  # still too many: drop the oldest keys
+                del self._events[next(iter(self._events))]
         return True
 
     def refund(self, key: str) -> None:

@@ -82,7 +82,13 @@ function send(obj) {
 }
 
 function connect() {
-  const radio = new URLSearchParams(location.search).get("radio") || app.me.radios[0]?.id || "";
+  const asked = new URLSearchParams(location.search).get("radio");
+  const known = (app.me.radios || []).map((r) => r.id);
+  if (asked && !known.includes(asked)) {
+    // A bookmark to a radio that was removed or renamed: the server would refuse it.
+    showMsg(`No radio "${asked}" on this server${known.length ? `; showing ${known[0]}` : ""}.`);
+  }
+  const radio = asked && known.includes(asked) ? asked : known[0] || "";
   const ws = new WebSocket(`wss://${location.host}/ws?radio=${encodeURIComponent(radio)}`);
   ws.binaryType = "arraybuffer";
   app.ws = ws;
@@ -206,8 +212,6 @@ function render(s) {
   const listener = app.hello && !app.hello.may_transmit && app.hello.user.role === "listener";
   document.querySelectorAll("#scope-controls select, #sc-hold").forEach((el) => { el.disabled = !!listener; });
   renderTx(s, prev);
-  // Never hide "TX OFF NOT CONFIRMED": the radio may still be on air.
-  if (!s.connected && !s.tx?.unconfirmed) setText("txtext", s.error ? `Radio not connected: ${s.error}` : "Radio not connected");
 }
 
 function renderTx(s, prev) {
@@ -229,13 +233,17 @@ function renderTx(s, prev) {
     setText("txlevel", "");
   } else {
     bar.dataset.state = "rx";
-    setText("txtext", "Receive");
+    setText("txtext", s.connected ? "Receive"
+      : s.error ? `Radio not connected: ${s.error}` : "Radio not connected");
     setText("txlevel", "");
   }
-  const others = tx.transmitting && !mine && !app.ptt;
+  // Never disable the button under a press still in effect: it must stay releasable.
+  const others = tx.transmitting && !mine && !app.ptt && !app.pressed;
   $("ptt").disabled = !app.hello?.may_transmit || !s.connected || others;
   // The server stopped our transmission (timeout, heartbeat, limits...): say why.
-  if (app.ptt && prev?.tx?.transmitting && !tx.transmitting) {
+  // A stop the server made (timeout, limits); not the late echo of our own
+  // release, which can arrive after a newer press is already in effect.
+  if (app.ptt && prev?.tx?.transmitting && !tx.transmitting && tx.last_stop !== "released") {
     localPtt(false);
     showMsg(STOP_TEXT[tx.last_stop] ?? "TX stopped.");
   }
@@ -265,7 +273,14 @@ function localPtt(down) {
 function setPtt(down) {
   if (down) {
     if (app.ptt) return;
-    if (app.pressed) send({ type: "ptt", down: false });  // toggle mode after a server stop
+    if (app.pressed) {
+      // Toggle mode after a server stop: this tap only releases. Keying again
+      // needs another, deliberate tap (a tap meant as "stop" must not re-key).
+      app.pressed = false;
+      send({ type: "ptt", down: false });
+      showMsg("Released. Tap again to transmit.");
+      return;
+    }
     showMsg(app.audioMode === "remote" || app.audioMode === "host"
       ? "" : "No microphone path: start audio with a mic route to transmit voice.");
     requestWakeLock();
@@ -285,11 +300,18 @@ function wirePtt() {
     ev.preventDefault();
     if (toggle.checked) { setPtt(!app.ptt); return; }
     btn.setPointerCapture(ev.pointerId);
+    app.pttPointer = ev.pointerId;
     setPtt(true);
   });
   // Release on pointer up anywhere (capture can be lost or never granted on
   // some engines), and always on pointer cancel.
-  const release = () => { if (!toggle.checked) setPtt(false); };
+  // Only the pointer that pressed releases: a second finger tapping a band
+  // button must not drop TX. Cancel, blur and hiding still release always.
+  const release = (ev) => {
+    if (toggle.checked || (app.pttPointer != null && ev.pointerId !== app.pttPointer)) return;
+    app.pttPointer = null;
+    setPtt(false);
+  };
   window.addEventListener("pointerup", release);
   btn.addEventListener("pointercancel", () => setPtt(false));
   btn.addEventListener("contextmenu", (ev) => ev.preventDefault());
@@ -536,10 +558,12 @@ function audioStatus() {
 }
 
 function onMicFrame(samples, peak) {
-  const db = peak > 0 ? Math.max(-60, 20 * Math.log10(peak)) : -60;
+  app.micPeak = Math.max(app.micPeak || 0, peak);  // the loudest frame since the last draw
   const now = performance.now();
   if (now - (app.micDrawn || 0) >= 100) {  // 50 frames/s; the meter needs ~10
     app.micDrawn = now;
+    const db = app.micPeak > 0 ? Math.max(-60, 20 * Math.log10(app.micPeak)) : -60;
+    app.micPeak = 0;
     $("au-mic").value = db;
     $("au-mic-t").textContent = `${Math.round(db)} dB`;
   }

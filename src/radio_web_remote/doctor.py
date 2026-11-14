@@ -29,6 +29,7 @@ from radio_web_remote.devices.serial_ports import (
     PortNotFound,
     model_for_driver,
     model_of,
+    radio_key,
     resolve_port,
 )
 from radio_web_remote.transport.base import ByteTransport
@@ -150,8 +151,14 @@ def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
         f"{len(users)} account(s), {admins} admin(s)",
         None if admins else "Create an admin: `radio-web-remote user add <name> --role admin`.",
     )
-    if cfg.server.tls.cert_file:
-        report.add("info", t, f"using your own certificate {cfg.server.tls.cert_file}")
+    if cfg.server.tls.cert_file and cfg.server.tls.key_file:
+        problem = _own_certificate_problem(cfg.server.tls.cert_file, cfg.server.tls.key_file)
+        if problem:
+            report.add(
+                "fail", t, f"your certificate: {problem}", "Fix server.tls.cert_file and key_file."
+            )
+        else:
+            report.add("ok", t, f"using your own certificate {cfg.server.tls.cert_file}")
         return
     d = tls_dir(data_dir)
     sans = wanted_sans(cfg)
@@ -170,6 +177,22 @@ def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
                 "Run `radio-web-remote cert reset`, then reinstall the CA on each device "
                 "from /setup.",
             )
+
+
+def _own_certificate_problem(cert_file: str, key_file: str) -> str | None:
+    import datetime as dt
+
+    from radio_web_remote.security.tls import _pair_problem
+
+    problem = _pair_problem(Path(cert_file), Path(key_file))
+    if problem:
+        return problem
+    from cryptography import x509
+
+    cert = x509.load_pem_x509_certificate(Path(cert_file).read_bytes())
+    if cert.not_valid_after_utc < dt.datetime.now(dt.UTC):
+        return f"expired on {cert.not_valid_after_utc:%Y-%m-%d}"
+    return None
 
 
 def check_listen_port(report: Report, cfg: Config) -> bool:
@@ -235,12 +258,6 @@ def check_audio(report: Report, devices: list[AudioDevice]) -> None:
         report.add("info", t, f"{d.index}: {d.name}  in {d.inputs}  out {d.outputs}  {d.host_api}")
 
 
-def _radio_key(p: PortInfo) -> str:
-    """One radio's identity across its ports (the IC-9700's ports end in A and B)."""
-    serial = p.serial_number or p.location or p.device
-    return serial.rstrip(" AB") if model_of(p) == "IC-9700" else serial
-
-
 def suggest_radios(report: Report, cfg: Config, ports: list[PortInfo]) -> None:
     """Config snippets for detected radios that no radio entry matches."""
     by_device = {p.device: p for p in ports}
@@ -249,13 +266,13 @@ def suggest_radios(report: Report, cfg: Config, ports: list[PortInfo]) -> None:
         with contextlib.suppress(PortNotFound):
             device = resolve_port(rc.match, ports, model_for_driver(rc.driver))
             if device in by_device:
-                configured.add(_radio_key(by_device[device]))
+                configured.add(radio_key(by_device[device]))
     seen: set[str] = set()
     for p in sorted(ports, key=lambda p: p.device):
         model = model_of(p)
         if not model or not p.serial_number:
             continue
-        key = _radio_key(p)
+        key = radio_key(p)
         if key in configured or key in seen:
             continue  # configured already, or the radio's second port
         serial = p.serial_number
@@ -284,6 +301,17 @@ def _serial_factory(port: str, baud: int) -> ByteTransport:
     from radio_web_remote.transport.serial_port import SerialTransport
 
     return SerialTransport(port, baud)
+
+
+def _errno(exc: BaseException) -> int | None:
+    """The OS error number behind an exception, following wrapped causes."""
+    seen: BaseException | None = exc
+    while seen is not None:
+        code = getattr(seen, "errno", None)
+        if isinstance(code, int):
+            return code
+        seen = seen.__cause__
+    return None
 
 
 def _permission_fix(port: str) -> str:
@@ -341,10 +369,20 @@ async def check_radio(
         await driver.connect()
         hz = await driver.get_frequency()
         mode = await driver.get_mode()
-    except PermissionError:
-        report.add("fail", t, f"cannot open {port}: permission denied", _permission_fix(port))
-        return
     except (RadioError, OSError) as exc:
+        code = _errno(exc)
+        if code in (errno.EACCES, errno.EPERM) or "Access is denied" in str(exc):
+            report.add("fail", t, f"cannot open {port}: permission denied", _permission_fix(port))
+            return
+        if code in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EBUSY) or "exclusively lock" in str(exc):
+            report.add(
+                "fail",
+                t,
+                f"{port} is in use by another program",
+                "Close the other program using the radio (a running server, logging or "
+                "digital-mode software), then run doctor again.",
+            )
+            return
         report.add(
             "fail",
             t,
@@ -436,13 +474,13 @@ async def run(
 
     report = Report()
     check_host(report)
-    source = find_config_file(cfg_path)
+    source = find_config_file(cfg_path, data_dir)
     cfg: Config | None = None
     error = None
     try:
-        cfg = load_config(cfg_path)
+        cfg = load_config(cfg_path, data_dir)
     except (ValidationError, ValueError, OSError) as exc:
-        error = str(exc).splitlines()[0]
+        error = str(exc)
     check_config(report, cfg, source, error)
     if cfg is None:
         return report

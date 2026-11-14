@@ -314,3 +314,30 @@ async def test_link_errors_are_radio_errors(rig):
     await driver.transport.close()
     with pytest.raises(RadioError):
         await driver.get_frequency()
+
+
+async def test_unkey_resend_never_unkeys_a_newer_key(rig):
+    """Review A2-1: a key that lands while unkey's read-back is in flight must not
+    be undone by that unkey's resend."""
+    driver, sim, _ = rig
+    sim.tx_release_s = 0.4  # a radio slow to report RX: resends are due
+    await driver.key()
+    task = asyncio.create_task(driver.unkey())
+    await asyncio.sleep(0.3)
+    assert await driver.key() is True
+    assert await task is False  # superseded by the key
+    await asyncio.sleep(0.5)  # anything a stale resend would have done is done
+    assert sim.state.transmitting and sim.tx_history[-1] is True
+
+
+async def test_malformed_reply_is_a_radio_error(rig):
+    """Review A2-3: a well-framed reply in an unexpected form is RadioBadReply."""
+    from radio_web_remote.radios.base import RadioBadReply
+
+    driver, sim, _ = rig
+    original = sim._handle
+    sim._handle = lambda frame, now: (
+        b"\x03\x00\xff" if frame.payload == b"\x03" else original(frame, now)
+    )
+    with pytest.raises(RadioBadReply):
+        await driver.get_frequency()

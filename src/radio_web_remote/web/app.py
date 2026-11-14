@@ -47,6 +47,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 SESSION_COOKIE = "rwr_session"
 LOGIN_CSRF_COOKIE = "rwr_login_csrf"
 AUDIT_THROTTLE_S = 60.0
+AUDIT_CAP_PER_MIN = 60  # failed-login lines per minute, all addresses together
 
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -90,14 +91,20 @@ def _client_ip(request: Request | WebSocket) -> str:
 
 
 def _limit_key(ip: str) -> str:
-    """Rate-limit key: the address, or its /64 for IPv6 (a host can rotate inside it)."""
+    """Rate-limit key: the address; for a global IPv6 address its /64, since a host
+    can rotate addresses inside it. An IPv4 client on a dual-stack listener shows
+    as ::ffff:a.b.c.d and is keyed by its IPv4 address; private and link-local
+    IPv6 addresses are keyed one by one (one /64 is often the whole LAN)."""
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return ip
-    if addr.version == 6 and not addr.is_loopback:
-        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
-    return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        if addr.is_global:
+            return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return str(addr)
 
 
 # Password hashing runs here, not in the default executor that other blocking
@@ -140,12 +147,27 @@ def create_app(
             ctx.audit({"event": event, **fields})
 
     throttle: dict[str, tuple[float, int]] = {}
+    cap = {"minute": 0, "count": 0, "suppressed": 0}
 
-    def audit_throttled(event: str, ip: str, **fields: Any) -> None:
-        """At most one line per event and address per minute, with a count of the
-        rest: requests that need no login must not be able to rotate away the
-        transmit history in the audit log."""
-        now, k = time.monotonic(), f"{event}|{_limit_key(ip)}"
+    def audit_capped(event: str, **fields: Any) -> None:
+        """Every failed login is logged, up to AUDIT_CAP_PER_MIN a minute in all;
+        past that a count is logged when the minute ends."""
+        minute = int(time.monotonic() // 60)
+        if minute != cap["minute"]:
+            if cap["suppressed"]:
+                audit_event(f"{event}_suppressed", count=cap["suppressed"])
+            cap.update(minute=minute, count=0, suppressed=0)
+        if cap["count"] >= AUDIT_CAP_PER_MIN:
+            cap["suppressed"] += 1
+            return
+        cap["count"] += 1
+        audit_event(event, **fields)
+
+    def audit_throttled(event: str, ip: str, key: str | None = None, **fields: Any) -> None:
+        """At most one line per event and key (default: the address) per minute,
+        with a count of the rest: floods must not rotate the transmit history
+        out of the audit log."""
+        now, k = time.monotonic(), f"{event}|{key or _limit_key(ip)}"
         last, suppressed = throttle.get(k, (0.0, 0))
         if now - last < AUDIT_THROTTLE_S:
             throttle[k] = (last, suppressed + 1)
@@ -256,10 +278,10 @@ def create_app(
         try:
             user = await loop.run_in_executor(_login_pool, users.verify_login, username, password)
         except LockedOut as exc:
-            audit_event("login_locked", user=username.lower(), ip=ip)
+            audit_throttled("login_locked", ip, key=username.lower(), user=username.lower())
             return JSONResponse({"error": "locked", "retry_after": exc.seconds_left}, 423)
         except LoginFailed:
-            audit_event("login_failed", user=username.lower(), ip=ip)
+            audit_capped("login_failed", user=username.lower(), ip=ip)
             return JSONResponse({"error": "wrong username or password"}, 401)
         ctx.login_limiter.refund(key)
         token, sess = await loop.run_in_executor(_login_pool, users.create_session, user, ip)

@@ -14,16 +14,17 @@
 [Unit]
 Description=radio-web-remote (browser remote for amateur radio transceivers)
 After=network-online.target sound.target
-# A crash loop (no init yet, a config error) stops after 10 tries in 5 minutes.
-StartLimitIntervalSec=300
-StartLimitBurst=10
 
 [Service]
-ExecStart=@EXE@ serve
+ExecStart="@EXE@" serve
 # The data folder, so a stray ./config.yaml in the home folder is not picked up.
+Environment="RADIO_WEB_REMOTE_HOME=@DATA@"
 WorkingDirectory=@DATA@
 Restart=always
 RestartSec=3
+# 78: setup incomplete (no admin yet, bad config). Restarting cannot help;
+# any other exit, a crash included, restarts (the server sends TX off first).
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=default.target

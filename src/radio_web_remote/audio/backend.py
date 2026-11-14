@@ -98,6 +98,9 @@ class AudioBackend(ABC):
         """True if the device stopped delivering (unplugged, radio off)."""
         return False
 
+    def reload_devices(self) -> None:  # noqa: B027  (optional: most backends have no list)
+        """Re-read the system's device list. Only call with every stream closed."""
+
     def write_tx(self, frame_pcm: bytes) -> None:
         self.fifo.write(frame_pcm)
 
@@ -122,7 +125,6 @@ class SoundDeviceBackend(AudioBackend):
         self.output_device = output_device
         self.label = label
         self.refs = refs
-        self._failed_once = False
         self._streams: list[Any] = []
         self._last_callback = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -149,11 +151,6 @@ class SoundDeviceBackend(AudioBackend):
             return
         from radio_web_remote.audio.devices import list_devices, resolve
 
-        if self._failed_once:
-            # PortAudio caches its device list; reload it to see newly plugged devices.
-            # Safe here: the router only retries while none of our streams are open.
-            sd._terminate()
-            sd._initialize()
         devices = list_devices(sd)
         api = None
         with contextlib.suppress(Exception):
@@ -164,11 +161,7 @@ class SoundDeviceBackend(AudioBackend):
     async def start(self) -> None:
         import sounddevice as sd
 
-        try:
-            self._resolve(sd)
-        except Exception:
-            self._failed_once = True
-            raise
+        self._resolve(sd)
         self._loop = asyncio.get_running_loop()
         try:
             self._open_streams(sd)
@@ -176,13 +169,21 @@ class SoundDeviceBackend(AudioBackend):
             # Close what did open (the input, say, when the output failed), so a
             # retry does not stack a second set of streams on the first.
             await self.stop()
-            self._failed_once = True
             raise
         self._last_callback = time.monotonic()
         log.info("%s audio running at %d Hz", self.label, self.device_rate)
 
     def stalled(self) -> bool:
         return bool(self._streams) and time.monotonic() - self._last_callback > STALL_S
+
+    def reload_devices(self) -> None:
+        # PortAudio caches its device list; reloading is the only way to see a
+        # device plugged in later. It closes every stream in the process, so the
+        # router calls it only after stopping both backends.
+        import sounddevice as sd
+
+        sd._terminate()
+        sd._initialize()
 
     def _open_streams(self, sd: Any) -> None:
         self.device_rate = self._pick_rate(sd)

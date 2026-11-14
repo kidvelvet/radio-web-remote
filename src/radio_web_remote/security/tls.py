@@ -129,17 +129,23 @@ def _write_private(path: Path, data: bytes) -> Path:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as fh:
         fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())  # on disk before the rename makes it the real file
     with contextlib.suppress(OSError):
         os.chmod(tmp, 0o600)
     return tmp
 
 
 def _write_pair(key_path: Path, key_pem: bytes, cert_path: Path, cert_pem: bytes) -> None:
-    """Key and certificate both written before either replaces the old one, so a
-    crash cannot leave a key that does not match its certificate."""
+    """Key and certificate both written (and synced) before either replaces the
+    old one. A crash between the two renames can still leave a mismatched pair;
+    ensure_certificates checks the pair at every start and reissues."""
     key_tmp = _write_private(key_path, key_pem)
     cert_tmp = cert_path.with_name(cert_path.name + ".tmp")
-    cert_tmp.write_bytes(cert_pem)
+    with open(cert_tmp, "wb") as fh:
+        fh.write(cert_pem)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(key_tmp, key_path)
     os.replace(cert_tmp, cert_path)
 
@@ -287,10 +293,28 @@ def cert_sans(cert_file: Path) -> SanSet:
     )
 
 
+def _pair_problem(cert_file: Path, key_file: Path) -> str | None:
+    """Why this certificate and key cannot be used together, or None."""
+    try:
+        cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
+        key = serialization.load_pem_private_key(key_file.read_bytes(), password=None)
+    except (OSError, ValueError) as exc:
+        return f"unreadable ({exc})"
+    pub = serialization.PublicFormat.SubjectPublicKeyInfo
+    if cert.public_key().public_bytes(
+        serialization.Encoding.DER, pub
+    ) != key.public_key().public_bytes(serialization.Encoding.DER, pub):
+        return "key does not match the certificate"
+    return None
+
+
 def needs_new_server_cert(cert_file: Path, sans: SanSet) -> str | None:
     """Reason to re-issue, or None if the current certificate is fine."""
     if not cert_file.exists():
         return "no server certificate yet"
+    problem = _pair_problem(cert_file, cert_file.with_name("server.key"))
+    if problem:
+        return f"server certificate {problem}"
     cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
     if cert.not_valid_after_utc - _now() < dt.timedelta(days=RENEW_WITHIN_DAYS):
         return f"expires {cert.not_valid_after_utc:%Y-%m-%d}"
@@ -312,6 +336,9 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
     if not (d / "ca.crt").exists() or not (d / "ca.key").exists():
         create_ca(d, cfg.site.club_name, sans)
         changed.append("created local CA")
+    elif problem := _pair_problem(d / "ca.crt", d / "ca.key"):
+        # Not repaired silently: a new CA means every device must install it again.
+        raise ValueError(f"local CA {problem}; run 'radio-web-remote cert reset'")
     outside = uncovered_by_ca(d / "ca.crt", sans)
     if outside:
         # Issuing them would give clients a certificate they must reject.

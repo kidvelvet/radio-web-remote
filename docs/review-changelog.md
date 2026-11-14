@@ -157,3 +157,115 @@ Windows `usb_serial` matching (both need a Windows test).
 **Rejected**: C-inefficiencies (measured negligible by the reviewer, 8 to 20
 us), B-per-frame audio resampling (under 0.4% of a frame), A8 parser cost
 (0.12 ms per second of scope traffic; only the clipping was changed).
+
+### Round 2 (2026-11-14): 719 lines changed of 8,813 = 8.2%: continue
+
+Five fresh reviewers, who also checked the round-1 changes for regressions.
+41 findings: 40 fixed, 1 deferred. (T) = regression test added; (P) =
+confirmed with the reviewer's browser probe.
+
+**PTT and transmit safety**
+
+- A2-1 (T): an unkey's resend could undo a key that landed while its
+  read-back was in flight (reproduced). The resend now re-checks for a newer
+  key while holding the bus.
+- A2-2: the unkey confirmation now has one deadline from the first TX off
+  (0.5 s); each step's wait counts against it (a silent radio took 1.7 s).
+- A2-4: "superseded" now means superseded by a key only; a newer unkey keeps
+  confirming instead of clearing the alarm.
+- B2-1 (T): waiting for in-flight unkeys with `asyncio.gather` meant that
+  cancelling the waiting key also cancelled another operator's TX off; it now
+  uses `asyncio.wait`.
+- B2-2 (T): a key queued behind an unkey when the station closed still keyed
+  the radio after the watchdog had stopped; it is now refused.
+- B2-3: a PTT press (urgent) could overtake a limited user's queued retune
+  (normal priority) and pass the band check on the old frequency; the retune
+  and its check now hold the key lock.
+- B2-5: the watchdog's TX-off retry now runs as a tracked task that a new key
+  waits for.
+- B2-7: a confirmed key clears a stale "TX off not confirmed" alarm instead of
+  showing it through the next operator's whole transmission.
+- C2-4: a PTT press could overtake a power or band change sent just before
+  it; a key now waits (2 s at most) for earlier controls, a release never does.
+- D2-1 (P): the late "released" state from the user's own release, arriving
+  after a quick re-press, was taken as a server stop: the radio stayed keyed
+  with the PTT button disabled and no microphone audio (all three browsers).
+- D2-2 (P): in toggle mode, a tap meant as "stop" right after a server timeout
+  re-keyed for another full period; that tap now only releases.
+- D2-5: in hold mode, a second finger tapping anywhere released PTT; only the
+  pressing pointer releases now.
+
+**Robustness**
+
+- A2-3 (T), B2-6: a well-framed reply in an unexpected form raised a
+  `ValueError` that callers did not handle (the link was declared lost, or a
+  TX limit recheck was skipped); it is now `RadioBadReply`, skipped per item.
+- B2-4: once host audio had failed, every host start reset PortAudio and
+  killed the radio's streams; the device-list reload now runs in the router
+  with every stream closed.
+- B2-8: items skipped after repeated NG are polled again after a reconnect.
+- C2-3 (T): the new control queue dropped the newest message when full (the
+  dial snapped back); controls now coalesce, newest value kept in place.
+- C2-8: routine disconnects no longer log as errors.
+- C2-9: the server key and certificate are flushed to disk before being
+  swapped in, and a mismatched or unreadable pair is reissued at start (a
+  broken CA is reported, not replaced).
+- A2-5: radio identity strips the IC-9700's " A"/" B" suffix exactly; the
+  "N radios connected" message counts radios, not ports.
+- A2-6: serial ports also get the kernel's TIOCEXCL lock (flock alone is
+  advisory and only stopped our own tools).
+
+**Security**
+
+- C2-1 (T): on a dual-stack bind every IPv4 client shared one rate-limit key,
+  and a private IPv6 /64 grouped the whole LAN: one person could lock everyone
+  out. IPv4-mapped addresses are keyed by their IPv4 address, and only global
+  IPv6 is grouped by /64.
+- C2-2: the lockout counter used `UPDATE ... RETURNING`, which SQLite before
+  3.35 rejects (lockout silently off); now an UPDATE then SELECT in one
+  transaction.
+- C2-5 (b): unknown-name lockout state now expires by age, so a flood of
+  names cannot reset it.
+- C2-6: locked-out attempts are logged once a minute per name, and failed
+  logins at most 60 a minute in all with a count of the rest.
+- C2-7: the rate limiter sweeps its keys at most every 5 s (it rescanned
+  10,000 keys on every login during a flood).
+
+**Browser**
+
+- D2-3 (P): while disconnected the status text was written twice per message.
+- D2-4: the 10 Hz mic meter shows the loudest frame since the last draw.
+- D2-6: a bookmark to a radio that no longer exists shows a message instead of
+  reconnecting forever.
+
+**Setup and tooling**
+
+- E2-1: install.sh now finds a server started through the command link, and
+  stops the macOS restart loop before the server (it restarted it after
+  uninstall).
+- E2-2: the systemd start limit stopped restarts for good after a first run
+  before `init`, and after any crash loop; instead `serve` exits 78 when setup
+  is incomplete and the unit does not restart on 78 only.
+- E2-3 (T): `init --password-stdin` without `--callsign` read the password as
+  the callsign.
+- E2-4: doctor reported permission and port-in-use problems as "no CI-V
+  answer" (pyserial raises its own exception type); it now says which.
+- E2-5: config errors are their own type (`ConfigError`, exit 78); missing
+  files and an unwritable data folder print one line; other errors keep their
+  traceback.
+- E2-6 (T): `--data-dir X` now uses `X/config.yaml`.
+- E2-7 (T): config errors name the field (`server.https_port: ...`).
+- E2-8: doctor checks your own certificate files (readable, matching, not
+  expired).
+- E2-9: install.ps1 rebuilds a venv without working pip, stops a running task
+  before upgrading and restarts it, and uses the data folder as the task's
+  working folder.
+- E2-10: the systemd unit sets the data folder explicitly and quotes the
+  program path; the unused variable is gone.
+- E2-11: the no-terminal message no longer gives wrong advice.
+- E2-12: CI also runs install.ps1 under Windows PowerShell 5.1 and runs
+  install.sh twice (the upgrade path).
+
+**Deferred**: C2-5 (a), a 0.5 ms timing difference between a wrong password
+on a real account (a database write) and on an unknown name, measured on an
+SSD. Making them equal means a dummy write per unknown name; left for later.

@@ -27,8 +27,11 @@ PY="${PYTHON:-python3}"
 OS="$(uname -s)"
 
 say() { printf '%s\n' "$*"; }
-EXE_PATTERN="$PREFIX/venv/bin/radio-web-remote serve"
-server_running() { pgrep -f "$EXE_PATTERN" >/dev/null 2>&1; }
+# This user's server, started through the venv or the command link in $BIN.
+EXE_PATTERN="($PREFIX/venv/bin|$BIN)/radio-web-remote serve"
+LOOP_PATTERN="$PREFIX/radio-web-remote.command"  # the macOS Terminal restart loop
+server_running() { pgrep -u "$(id -u)" -f "$EXE_PATTERN" >/dev/null 2>&1; }
+loop_running() { pgrep -u "$(id -u)" -f "$LOOP_PATTERN" >/dev/null 2>&1; }
 # Services start in the data folder: a stray ./config.yaml elsewhere must not win.
 case "$(uname -s)" in
     Darwin) DATA="$HOME/Library/Application Support/radio-web-remote" ;;
@@ -62,8 +65,11 @@ stop_server() {  # before deleting the program it runs from
     case "$OS" in
         Linux) systemctl --user stop radio-web-remote.service 2>/dev/null || true ;;
     esac
+    if loop_running; then  # first, or it starts the server again 3 s later
+        pkill -u "$(id -u)" -f "$LOOP_PATTERN" || true
+    fi
     if server_running; then
-        pkill -f "$EXE_PATTERN" || true
+        pkill -u "$(id -u)" -f "$EXE_PATTERN" || true
         say "Stopped the running server."
     fi
 }
@@ -80,6 +86,9 @@ install_service() {
             systemctl --user daemon-reload
             systemctl --user enable radio-web-remote.service
             systemctl --user restart radio-web-remote.service  # starts it, or picks up an upgrade
+            if [ ! -f "$DATA/users.db" ]; then
+                say "After 'radio-web-remote init', start it with:  systemctl --user restart radio-web-remote"
+            fi
             say "Service: systemctl --user status radio-web-remote"
             say "To keep it running when you are logged out:  sudo loginctl enable-linger $USER" ;;
         Darwin)
@@ -89,7 +98,7 @@ install_service() {
             # permission, so the server runs in a Terminal window started at login.
             write_command "$exe" > "$f"
             chmod +x "$f"
-            if server_running; then
+            if loop_running || server_running; then
                 say "The server is already running. Close its Terminal window to stop it;"
                 say "it starts again with the new version when you open $f."
             else
@@ -108,15 +117,16 @@ write_systemd_unit() {
 [Unit]
 Description=radio-web-remote (browser remote for amateur radio transceivers)
 After=network-online.target sound.target
-# A crash loop (no init yet, a config error) stops after 10 tries in 5 minutes.
-StartLimitIntervalSec=300
-StartLimitBurst=10
 
 [Service]
-ExecStart=$1 serve
+ExecStart="$1" serve
+Environment="RADIO_WEB_REMOTE_HOME=$DATA"
 WorkingDirectory=$DATA
 Restart=always
 RestartSec=3
+# 78: setup incomplete (no admin yet, bad config). Restarting cannot help;
+# any other exit, a crash included, restarts (the server sends TX off first).
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=default.target
@@ -130,6 +140,7 @@ write_command() {
 # stops: a key sent over CI-V survives the server dying, and the server
 # sends TX off first thing when it starts. Close this window to stop it.
 mkdir -p "$DATA" && cd "$DATA" || exit 1
+export RADIO_WEB_REMOTE_HOME="$DATA"
 while true; do
     "$1" serve
     echo "radio-web-remote stopped (exit \$?); restarting in 3 s. Close this window to stop."
@@ -138,7 +149,6 @@ done
 EOF
 }
 
-HERE="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)"
 WANT_SERVICE=0
 for arg in "$@"; do
     case "$arg" in

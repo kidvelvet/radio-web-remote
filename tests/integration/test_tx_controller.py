@@ -370,3 +370,31 @@ async def test_no_key_after_close(rig):
     with pytest.raises(TxDenied):
         await rig.tx.ptt_down(ALICE)
     assert not rig.on_air
+
+
+async def test_cancelled_key_does_not_cancel_another_tx_off(rig):
+    """Review B2-1: a caller cancelled while waiting for in-flight unkeys must not
+    cancel them (asyncio.gather would)."""
+    await rig.tx.ptt_down(ALICE)
+    release = asyncio.create_task(rig.tx.ptt_up(ALICE))
+    await asyncio.sleep(0)
+    press = asyncio.create_task(rig.tx.ptt_down(BOB))
+    await asyncio.sleep(0)
+    press.cancel()
+    await release  # Alice's release completes; it was not cancelled with Bob's press
+    assert not rig.on_air and not rig.tx.status.unkey_unconfirmed
+
+
+async def test_close_during_a_waiting_key_does_not_key(rig):
+    """Review B2-2: a press queued behind an unkey when close() runs stays off the air."""
+    await rig.tx.ptt_down(ALICE)
+    release = asyncio.create_task(rig.tx.ptt_up(ALICE))
+    await asyncio.sleep(0)
+    press = asyncio.create_task(rig.tx.ptt_down(BOB))
+    await asyncio.sleep(0)
+    await rig.tx.close()
+    await release
+    with pytest.raises(TxDenied):
+        await press
+    await asyncio.sleep(0.2)
+    assert not rig.on_air and not rig.tx.status.transmitting

@@ -23,7 +23,6 @@ from radio_web_remote.audio.backend import AudioBackend
 from radio_web_remote.audio.router import AudioRouter
 from radio_web_remote.config import PttConfig, RadioConfig
 from radio_web_remote.devices.serial_ports import model_for_driver, resolve_port
-from radio_web_remote.protocols.civ.commands import ReplyError
 from radio_web_remote.radios import registry
 from radio_web_remote.radios.base import (
     Feature,
@@ -31,6 +30,7 @@ from radio_web_remote.radios.base import (
     Meter,
     MeterReading,
     ModeSetting,
+    RadioBadReply,
     RadioDriver,
     RadioError,
     RadioRejected,
@@ -44,6 +44,7 @@ from radio_web_remote.station.tx_controller import (
     Operator,
     Role,
     TxController,
+    TxDenied,
     TxStatus,
 )
 from radio_web_remote.transport.base import ByteTransport
@@ -159,7 +160,6 @@ class RadioStation:
         self._scope_listeners: list[ScopeListener] = []
         self._scope_wanted = False
         self._task: asyncio.Task[None] | None = None
-        self._bg: set[asyncio.Task[None]] = set()
         self._ng_counts: dict[str, int] = {}
         self._recheck_hz: int | None = None
         self._recheck_task: asyncio.Task[None] | None = None
@@ -224,10 +224,10 @@ class RadioStation:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
-        for task in [*self._bg, *([self._recheck_task] if self._recheck_task else [])]:
-            task.cancel()
+        if self._recheck_task is not None:
+            self._recheck_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+                await self._recheck_task
         await self._drop_driver()
 
     @property
@@ -263,6 +263,7 @@ class RadioStation:
 
     async def _serve_once(self) -> None:
         self._connected_once = False
+        self._ng_counts.clear()  # a new link (or a power-cycled radio): ask again
         transport = self._factory()
         driver = registry.create(
             self.cfg.driver,
@@ -319,6 +320,8 @@ class RadioStation:
                         await self._poll_slow(driver, slow[turn % len(slow)])
                         turn += 1
                     timeouts = 0
+                except RadioBadReply as exc:
+                    log.warning("radio %s: unexpected reply, poll skipped: %s", self.cfg.id, exc)
                 except RadioTimeout:
                     timeouts += 1
                     if timeouts >= self._lost_after:
@@ -357,7 +360,7 @@ class RadioStation:
             return
         try:
             await self._poll_slow_item(driver, item)
-        except (RadioRejected, Unsupported) as exc:
+        except (RadioRejected, RadioBadReply, Unsupported) as exc:
             n = self._ng_counts[key] = self._ng_counts.get(key, 0) + 1
             if n == NG_BEFORE_SKIP:
                 log.warning(
@@ -419,7 +422,7 @@ class RadioStation:
             wanted = tx if self.tx.status.transmitting else rx
             readings: dict[str, dict[str, Any]] = {}
             for m in wanted:
-                with contextlib.suppress(RadioTimeout, RadioRejected, ReplyError):
+                with contextlib.suppress(RadioTimeout, RadioRejected, RadioBadReply):
                     readings[m.value] = _reading_json(await driver.get_meter(m))
             if readings:
                 self._update(meters=readings)
@@ -485,11 +488,6 @@ class RadioStation:
             except Exception:
                 log.exception("TX limit recheck failed on %s", self.cfg.id)
 
-    def _spawn(self, coro: Any) -> None:
-        task: asyncio.Task[None] = asyncio.ensure_future(coro)
-        self._bg.add(task)
-        task.add_done_callback(self._bg.discard)
-
     # -- state fan-out -----------------------------------------------------
     def add_listener(self, listener: StateListener) -> None:
         self._listeners.append(listener)
@@ -545,12 +543,15 @@ class RadioStation:
 
     async def set_frequency(self, op: Operator, hz: int) -> None:
         driver = self._require_control(op)
-        if self.tx.status.transmitting and not op.limits.allows_frequency(hz):
-            # Refuse before sending: retuning a keyed radio out of band would
-            # transmit there until the after-the-fact limit check stopped it.
-            raise ControlDenied(f"{hz} Hz is outside your bands while transmitting")
-        self._bump("frequency")
-        await driver.set_frequency(hz)
+        # Refused before sending (retuning a keyed radio out of band would transmit
+        # there until the after-the-fact check stopped it), and held against a PTT
+        # press overtaking this retune at higher bus priority.
+        try:
+            async with self.tx.retune_guard(op, hz):
+                self._bump("frequency")
+                await driver.set_frequency(hz)
+        except TxDenied as exc:
+            raise ControlDenied(str(exc)) from None
         self._bump("frequency")
         self._update(frequency_hz=hz)
         await self.tx.frequency_changed(hz)

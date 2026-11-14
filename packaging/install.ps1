@@ -80,13 +80,29 @@ param([switch]$Service, [switch]$Uninstall)
     $PyExe, $PyArgs = $Py
 
     Write-Host "Installing radio-web-remote into $Prefix"
-    if (-not (Test-Path (Join-Path $Scripts "python.exe"))) {
+    # A venv whose Python was uninstalled, or made half-way, has no working pip: make it again.
+    $venvPython = Join-Path $Scripts "python.exe"
+    $pipOk = $false
+    if (Test-Path $venvPython) {
+        & $venvPython -m pip --version *> $null
+        $pipOk = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $pipOk) {
+        if (Test-Path (Join-Path $Prefix "venv")) { Remove-Item -Recurse -Force (Join-Path $Prefix "venv") }
         & $PyExe @PyArgs -m venv (Join-Path $Prefix "venv")
         if ($LASTEXITCODE -ne 0) { throw "could not create the virtual environment" }
     }
-    & (Join-Path $Scripts "python.exe") -m pip install --quiet --upgrade pip
-    & (Join-Path $Scripts "python.exe") -m pip install --quiet --upgrade $Source
+    # Stop a running server before replacing its files; it is started again below.
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    $wasRunning = $task -and $task.State -eq "Running"
+    if ($wasRunning) { Stop-ScheduledTask -TaskName $TaskName }
+    & $venvPython -m pip install --quiet --upgrade pip
+    & $venvPython -m pip install --quiet --upgrade $Source
     if ($LASTEXITCODE -ne 0) { throw "pip could not install $Source" }
+    if ($wasRunning -and -not $Service) {
+        Start-ScheduledTask -TaskName $TaskName
+        Write-Host "Restarted the scheduled task with the new version."
+    }
     Set-UserPath $Scripts $true
     $env:Path = "$Scripts;$env:Path"
     & $Exe --version
@@ -97,7 +113,10 @@ param([switch]$Service, [switch]$Uninstall)
         # survives the server dying (docs/hardware-test.md, H7300-4 C); the server
         # sends TX off first thing when it starts.
         Remove-Task
-        $action = New-ScheduledTaskAction -Execute $Exe -Argument "serve" -WorkingDirectory $Prefix
+        # Working folder: the data folder, so no stray config.yaml elsewhere is picked up.
+        $data = Join-Path $env:LOCALAPPDATA "radio-web-remote"
+        New-Item -ItemType Directory -Force -Path $data | Out-Null
+        $action = New-ScheduledTaskAction -Execute $Exe -Argument "serve" -WorkingDirectory $data
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
         $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
             -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

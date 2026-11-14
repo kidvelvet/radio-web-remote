@@ -26,7 +26,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
@@ -241,7 +241,9 @@ class TxController:
             # A TX off still on its way must reach the radio before this key:
             # otherwise it lands after TX on and unkeys the new holder.
             if self._unkey_tasks:
-                await asyncio.gather(*list(self._unkey_tasks), return_exceptions=True)
+                # asyncio.wait, not gather: cancelling this caller must not cancel
+                # another operator's TX off.
+                await asyncio.wait(list(self._unkey_tasks))
             holder = self._holder
             if holder is not None:
                 if holder.session_id == op.session_id:
@@ -270,6 +272,10 @@ class TxController:
             self._started_wall = time.time()
             self._started_hz = hz
             self._notify()
+            if self._closed:  # close() ran while this press waited above
+                self._holder = None
+                self._notify()
+                raise TxDenied(DenyReason.RADIO_ERROR, "the station is shutting down")
             try:
                 keyed = await self.driver.key()
             except RadioError as exc:
@@ -285,6 +291,12 @@ class TxController:
                 await self._stop(StopReason.RADIO_ERROR, force=True)
                 raise TxDenied(DenyReason.RADIO_ERROR, "TX off overtook the key; press again")
             self._keyed = True
+            if self._unkey_failures:
+                # A key the radio confirmed: whatever the earlier TX off left
+                # unconfirmed is no longer the state of the radio.
+                self._emit_radio_audit("tx_off_superseded", by="new key")
+                self._unkey_failures = 0
+                self._unkey_pending = False
             self._notify()
             self._emit_audit("tx_start", op, frequency_hz=hz)
 
@@ -376,10 +388,29 @@ class TxController:
         self._notify()
         # Run the unkey as its own task and shield it: cancelling the caller
         # (a closing WebSocket, server shutdown) must not cancel TX off.
+        await asyncio.shield(self._spawn_unkey())
+
+    def _spawn_unkey(self) -> asyncio.Task[None]:
+        """Every TX off runs as a tracked task: a new key waits for it, and
+        cancelling whoever awaits it does not cancel it."""
         task = asyncio.ensure_future(self._unkey())
         self._unkey_tasks.add(task)
         task.add_done_callback(self._unkey_tasks.discard)
-        await asyncio.shield(task)
+        return task
+
+    @contextlib.asynccontextmanager
+    async def retune_guard(self, op: Operator, hz: int) -> AsyncIterator[None]:
+        """Hold the key lock across a limited user's limit check and retune, so a
+        PTT press cannot be checked against the old frequency and key in between."""
+        if op.limits.bands_hz is None:
+            yield
+            return
+        async with self._key_lock:
+            if self._holder is not None and not op.limits.allows_frequency(hz):
+                raise TxDenied(
+                    DenyReason.OUT_OF_LIMITS, f"{hz} Hz is outside your bands while transmitting"
+                )
+            yield
 
     async def _unkey(self) -> None:
         self._last_unkey_try = self._clock()
@@ -399,7 +430,9 @@ class TxController:
                 after = round(self._clock() - self._unconfirmed_since, 3)
                 if confirmed is False:  # a newer key took over before RX was seen
                     log.warning(
-                        "TX off on %s superseded by a new key after %.1f s", self.radio_id, after
+                        "TX off on %s superseded by a newer PTT command after %.1f s",
+                        self.radio_id,
+                        after,
                     )
                     self._emit_radio_audit("tx_off_superseded", after_s=after)
                 else:
@@ -426,8 +459,12 @@ class TxController:
                 await self._stop(StopReason.HEARTBEAT_LOST)
             elif now - self._started_mono > self.ptt.tx_timeout_s:
                 await self._stop(StopReason.TIMEOUT)
-        elif self._unkey_pending and now - self._last_unkey_try >= UNKEY_RETRY_S:
-            await self._unkey()
+        elif (
+            self._unkey_pending
+            and now - self._last_unkey_try >= UNKEY_RETRY_S
+            and not self._unkey_tasks  # one at a time; a new key waits for it
+        ):
+            await asyncio.shield(self._spawn_unkey())
 
     def _emit_radio_audit(self, event: str, **fields: Any) -> None:
         if self._audit is not None:

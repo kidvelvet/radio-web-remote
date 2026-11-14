@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import getpass
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -22,13 +23,17 @@ from typing import Any
 from pydantic import ValidationError
 
 from radio_web_remote import __version__
-from radio_web_remote.config import find_config_file, load_config
+from radio_web_remote.config import ConfigError, find_config_file, load_config
+
+# Setup is incomplete (bad config, no admin yet): restarting will not help.
+# The systemd unit's RestartPreventExitStatus uses it (sysexits EX_CONFIG).
+EXIT_CONFIG = 78
 
 
 def _cmd_config_check(args: argparse.Namespace) -> int:
-    path = find_config_file(args.config)
+    path = find_config_file(args.config, _data_dir_arg(args))
     try:
-        cfg = load_config(args.config)
+        cfg = load_config(args.config, _data_dir_arg(args))
     except (ValidationError, ValueError, OSError) as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 1
@@ -108,6 +113,12 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 # -- accounts, certificates, server ----------------------------------------
 
 
+def _data_dir_arg(args: argparse.Namespace) -> Path | None:
+    """--data-dir if given: its config.yaml is used when there is no other."""
+    d = getattr(args, "data_dir", None)
+    return Path(d) if d else None
+
+
 def _data_dir(args: argparse.Namespace) -> Path:
     from radio_web_remote import paths
 
@@ -135,16 +146,19 @@ def _cmd_init(args: argparse.Namespace) -> int:
     from radio_web_remote.security.users import UserError
     from radio_web_remote.station.tx_controller import Role
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, _data_dir_arg(args))
     if args.password_stdin and not args.username:
         print("error: --password-stdin needs --username", file=sys.stderr)
         return 1
     store = _store(args)
     if store.count_admins() == 0:
         username = args.username or input("Admin username: ").strip()
-        callsign = (
-            args.callsign if args.callsign is not None else input("Callsign (blank if none): ")
-        )
+        if args.callsign is not None:
+            callsign = args.callsign
+        elif args.password_stdin:
+            callsign = ""  # stdin carries the password; do not read it as the callsign
+        else:
+            callsign = input("Callsign (blank if none): ")
         try:
             store.create_user(username, _read_password(args), Role.ADMIN, callsign)
         except UserError as exc:
@@ -240,7 +254,7 @@ def _cmd_audio_devices(_: argparse.Namespace) -> int:
 def _cmd_cert(args: argparse.Namespace) -> int:
     from radio_web_remote.security.tls import cert_sans, ensure_certificates, tls_dir
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, _data_dir_arg(args))
     d = tls_dir(_data_dir(args))
     if args.cert_command == "reset":
         if not args.yes:
@@ -272,10 +286,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     try:
-        serve(load_config(args.config), _data_dir(args), simulate=args.simulate)
+        serve(
+            load_config(args.config, _data_dir_arg(args)), _data_dir(args), simulate=args.simulate
+        )
     except NoAdmin as exc:
         print(exc, file=sys.stderr)
-        return 1
+        return EXIT_CONFIG  # a service manager should not keep restarting this
     return 0
 
 
@@ -383,11 +399,21 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         result: int = args.func(args)
-    except (ValidationError, ValueError) as exc:  # config errors, bad values
-        print(f"error: {exc}", file=sys.stderr)
+    except ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    except (OSError, sqlite3.Error) as exc:  # missing file, unwritable data folder
+        where = getattr(exc, "filename", None)
+        print(
+            f"error: {exc}" + (f" ({where})" if where and str(where) not in str(exc) else ""),
+            file=sys.stderr,
+        )
         return 1
     except EOFError:
-        print("error: no terminal to ask on; use --username and --password-stdin", file=sys.stderr)
+        print(
+            "error: this command needs an answer and there is no terminal; see --help for options",
+            file=sys.stderr,
+        )
         return 1
     except KeyboardInterrupt:
         return 130

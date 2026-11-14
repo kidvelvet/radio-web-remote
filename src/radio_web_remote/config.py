@@ -20,6 +20,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -260,39 +261,62 @@ class Config(_Strict):
 ENV_CONFIG = "RADIO_WEB_REMOTE_CONFIG"
 
 
-def find_config_file(explicit: str | os.PathLike[str] | None = None) -> Path | None:
+class ConfigError(ValueError):
+    """The configuration cannot be used (file unreadable, not YAML, invalid)."""
+
+
+def _format_validation(exc: ValidationError) -> str:
+    parts = []
+    for e in exc.errors():
+        loc = ".".join(str(x) for x in e.get("loc", ()))
+        parts.append(f"{loc}: {e.get('msg')}" if loc else str(e.get("msg")))
+    return "; ".join(parts)
+
+
+def find_config_file(
+    explicit: str | os.PathLike[str] | None = None, data_dir: Path | None = None
+) -> Path | None:
     """Return the config file to use, or None to run on defaults.
 
     Order: explicit argument, $RADIO_WEB_REMOTE_CONFIG, ./config.yaml,
-    <data dir>/config.yaml.
+    <data dir>/config.yaml (the --data-dir folder if one is given).
     """
     if explicit is not None:
         return Path(explicit)
     env = os.environ.get(ENV_CONFIG)
     if env:
         return Path(env)
-    for candidate in (Path("config.yaml"), paths.data_dir() / "config.yaml"):
+    for candidate in (Path("config.yaml"), (data_dir or paths.data_dir()) / "config.yaml"):
         if candidate.is_file():
             return candidate
     return None
 
 
-def load_config(path: str | os.PathLike[str] | None = None) -> Config:
-    """Load and validate configuration. A missing explicit path is an error."""
-    file = find_config_file(path)
+def load_config(path: str | os.PathLike[str] | None = None, data_dir: Path | None = None) -> Config:
+    """Load and validate configuration. A missing explicit path is an error.
+
+    Every problem with the file raises ConfigError, with the file and the field."""
+    file = find_config_file(path, data_dir)
     if file is None:
         return Config()
-    with open(file, encoding="utf-8") as fh:
-        try:
+    try:
+        with open(file, encoding="utf-8") as fh:
             raw = yaml.safe_load(fh)
-        except yaml.YAMLError as exc:
-            raise ValueError(f"{file}: not valid YAML: {exc}") from None
+    except OSError as exc:
+        raise ConfigError(f"{file}: {exc.strerror or exc}") from None
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{file}: not valid YAML: {exc}") from None
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise ValueError(f"{file}: top level must be a mapping")
-    _reject_bare_int_addresses(file, raw)
-    return Config.model_validate(raw)
+        raise ConfigError(f"{file}: top level must be a mapping")
+    try:
+        _reject_bare_int_addresses(file, raw)
+        return Config.model_validate(raw)
+    except ValidationError as exc:
+        raise ConfigError(f"{file}: {_format_validation(exc)}") from None
+    except ValueError as exc:
+        raise ConfigError(f"{file}: {exc}") from None
 
 
 def _reject_bare_int_addresses(file: Path, raw: dict[str, Any]) -> None:

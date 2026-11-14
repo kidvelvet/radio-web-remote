@@ -34,6 +34,7 @@ from radio_web_remote.station.tx_controller import Role, TxLimits
 
 LOCK_AFTER = 5
 LOCK_MINUTES = 15
+GHOST_LIMIT = 10_000  # unknown names tracked for lockout
 MIN_PASSWORD_LEN = 10
 SESSION_IDLE_S = 12 * 3600
 SESSION_MAX_S = 7 * 24 * 3600
@@ -122,7 +123,7 @@ def _format_bands(bands: tuple[tuple[int, int], ...] | None) -> str | None:
 
 class UserStore:
     def __init__(self, path: Path, hasher: PasswordHasher | None = None) -> None:
-        self._ghosts: dict[str, tuple[int, float]] = {}  # unknown names: failures, lock
+        self._ghosts: dict[str, tuple[int, float, float]] = {}  # failures, locked until, first
         self._ghost_lock = threading.Lock()
         self.path = path
         self.ph = hasher or PasswordHasher()
@@ -260,19 +261,26 @@ class UserStore:
     # -- login -----------------------------------------------------------
     def _ghost_locked_until(self, username: str, now: float) -> float:
         entry = self._ghosts.get(username)
-        return entry[1] if entry and entry[1] > now else 0.0
+        return entry[1] if entry and entry[1] > now else 0.0  # (failures, locked until, first)
 
     def _ghost_failed(self, username: str, now: float) -> bool:
         """Count a failure for a name with no account; True when it locks now."""
+        window = LOCK_MINUTES * 60
         with self._ghost_lock:
-            if len(self._ghosts) > 10_000:  # bound memory under a flood of names
-                self._ghosts = {k: v for k, v in self._ghosts.items() if v[1] > now}
-            failed, _ = self._ghosts.get(username, (0, 0.0))
+            if len(self._ghosts) > GHOST_LIMIT:  # bound memory under a flood of names
+                # Forget by age, like a real account's counter would matter: entries
+                # whose lock has ended and whose first failure is older than the window.
+                self._ghosts = {
+                    k: v for k, v in self._ghosts.items() if v[1] > now or now - v[2] < window
+                }
+                while len(self._ghosts) > GHOST_LIMIT:  # still a flood: oldest first
+                    self._ghosts.pop(next(iter(self._ghosts)))
+            failed, _, first = self._ghosts.get(username, (0, 0.0, now))
             failed += 1
             if failed >= LOCK_AFTER:
-                self._ghosts[username] = (0, now + LOCK_MINUTES * 60)
+                self._ghosts[username] = (0, now + window, now)
                 return True
-            self._ghosts[username] = (failed, 0.0)
+            self._ghosts[username] = (failed, 0.0, first)
             return False
 
     def verify_login(self, username: str, password: str) -> User:
@@ -297,11 +305,11 @@ class UserStore:
             self.ph.verify(r["pw_hash"], password)
         except (VerifyMismatchError, VerificationError, InvalidHashError):
             # Atomic: concurrent wrong guesses must not each see the old count.
-            with self._db() as db:
-                failed = db.execute(
-                    "UPDATE users SET failed = failed + 1 WHERE id = ? RETURNING failed",
-                    (r["id"],),
-                ).fetchone()[0]
+            with self._db() as db:  # one transaction: the UPDATE holds the write lock
+                db.execute("UPDATE users SET failed = failed + 1 WHERE id = ?", (r["id"],))
+                failed = db.execute("SELECT failed FROM users WHERE id = ?", (r["id"],)).fetchone()[
+                    0
+                ]
                 if failed >= LOCK_AFTER:
                     db.execute(
                         "UPDATE users SET failed = 0, locked_until = ? WHERE id = ?",

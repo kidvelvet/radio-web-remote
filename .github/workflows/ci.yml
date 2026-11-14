@@ -143,6 +143,7 @@ jobs:
         run: |
           # Piped, as the one-line install runs it (no packaging/ folder beside it).
           cat packaging/install.sh | sh
+          cat packaging/install.sh | sh  # again: the upgrade path
           python tools/install_smoke.py "$RWR_BIN/radio-web-remote"
           sh packaging/install.sh --uninstall
           test ! -e "$RWR_BIN/radio-web-remote"
@@ -158,6 +159,21 @@ jobs:
           # Through Invoke-Expression, as `irm ... | iex` runs it.
           Get-Content packaging/install.ps1 -Raw | Invoke-Expression
           python tools/install_smoke.py "$env:RWR_PREFIX\venv\Scripts\radio-web-remote.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./packaging/install.ps1 -Uninstall
+          if (Test-Path "$env:RWR_PREFIX") { throw "uninstall left $env:RWR_PREFIX" }
+
+      # Windows PowerShell 5.1: what `irm | iex` runs in on a stock Windows 10/11.
+      - name: install.ps1 (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          RWR_SOURCE: ${{ github.workspace }}
+          RWR_PREFIX: ${{ runner.temp }}\rwr51
+          RWR_PYTHON: python
+        run: |
+          Get-Content packaging/install.ps1 -Raw | Invoke-Expression
+          & "$env:RWR_PREFIX\venv\Scripts\radio-web-remote.exe" --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./packaging/install.ps1 -Uninstall
           if (Test-Path "$env:RWR_PREFIX") { throw "uninstall left $env:RWR_PREFIX" }

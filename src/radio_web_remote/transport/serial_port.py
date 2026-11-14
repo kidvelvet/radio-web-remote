@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import os
+import sys
 import threading
 from typing import Any
 
@@ -57,11 +59,19 @@ class SerialTransport(ByteTransport):
         ser.dtr = False
         ser.rts = False
         if os.name == "posix":
-            # Refuse a second opener (probe, doctor, another program) while the
-            # server has the radio: they would split its replies between them.
+            # Refuse a second opener while the server has the radio: two programs
+            # would split its replies between them. pyserial's flag is an advisory
+            # flock (it stops our own probe and doctor); TIOCEXCL below makes the
+            # kernel refuse every other program too.
             ser.exclusive = True
         self._io = concurrent.futures.ThreadPoolExecutor(1, f"serial-io-{self.port}")
         await self._loop.run_in_executor(self._io, ser.open)
+        if sys.platform != "win32":  # (Windows opens COM ports exclusively anyway)
+            with contextlib.suppress(Exception):
+                import fcntl
+                import termios
+
+                fcntl.ioctl(ser.fileno(), termios.TIOCEXCL)
         self._ser = ser
         self._stop.clear()
         self._thread = threading.Thread(

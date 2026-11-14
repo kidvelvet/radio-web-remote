@@ -690,3 +690,32 @@ def test_ws_rejects_float_and_bool_where_int_is_needed(env, msg):
         ws.receive_json()
         ws.send_json(msg)
         assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"
+
+
+def test_rate_limit_keys():
+    """Review C2-1: IPv4 on a dual-stack bind is its own key; only global IPv6 is grouped."""
+    from radio_web_remote.web.app import _limit_key
+
+    assert _limit_key("::ffff:192.168.1.5") == "192.168.1.5"
+    assert _limit_key("::ffff:192.168.1.5") != _limit_key("::ffff:10.0.0.9")
+    assert _limit_key("fd00::5") != _limit_key("fd00::6")  # one ULA /64 is often the LAN
+    assert _limit_key("2600:1f18::1") == _limit_key("2600:1f18::2") == "2600:1f18::/64"
+
+
+async def test_controls_coalesce_keeping_the_newest():
+    """Review C2-3: a spun VFO queues one frequency (the latest), not every step."""
+    from radio_web_remote.web.hub import MAX_PENDING_CONTROLS, _Controls
+
+    c = _Controls()
+    for hz in range(1, 100):
+        assert c.put({"type": "set_frequency", "hz": hz})
+    c.put({"type": "set_level", "level": "af", "value": 1})
+    c.put({"type": "set_level", "level": "af", "value": 2})
+    assert list(c.pending.values()) == [
+        {"type": "set_frequency", "hz": 99},
+        {"type": "set_level", "level": "af", "value": 2},
+    ]
+    for _ in range(MAX_PENDING_CONTROLS - 2):  # swaps do not coalesce: two are not one
+        assert c.put({"type": "swap_bands"})
+    assert not c.put({"type": "swap_bands"})
+    assert c.put({"type": "set_frequency", "hz": 7})  # coalescable still accepted

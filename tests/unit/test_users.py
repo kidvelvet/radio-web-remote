@@ -159,3 +159,29 @@ def test_unknown_names_lock_like_real_ones(store):
         store.verify_login("nobody", "wrong password here")
     with pytest.raises(LockedOut):
         store.verify_login("nobody", PW)
+
+
+def test_init_with_password_on_stdin_needs_no_callsign(tmp_path, monkeypatch, capsys):
+    """Review E2-3: the password line was read as the callsign."""
+    import io
+
+    from radio_web_remote import cli
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("a-good-password-123\n"))
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("server:\n  bind_address: 127.0.0.1\n")
+    rc = cli.main(
+        [
+            "init",
+            "--config",
+            str(cfg),
+            "--data-dir",
+            str(tmp_path),
+            "--username",
+            "admin",
+            "--password-stdin",
+        ]
+    )
+    assert rc == 0, capsys.readouterr().err
+    user = UserStore(tmp_path / "users.db").verify_login("admin", "a-good-password-123")
+    assert user.callsign == ""

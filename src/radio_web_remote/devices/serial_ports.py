@@ -62,6 +62,14 @@ def model_of(port: PortInfo) -> str | None:
     return None
 
 
+def radio_key(p: PortInfo) -> str:
+    """One radio's identity across its ports (the IC-9700's serials end in " A"/" B")."""
+    serial = p.serial_number or p.location or p.device
+    if model_of(p) == "IC-9700":
+        return serial.removesuffix(" A").removesuffix(" B")
+    return serial
+
+
 def model_for_driver(driver: str) -> str | None:
     """'icom.ic9700' -> 'IC-9700', the name model_of() gives that radio's ports."""
     for model, name in DRIVER_FOR.items():
@@ -135,14 +143,14 @@ def resolve_port(
         return match.port
     if model:
         hits = [p for p in ports if model_of(p) == model]
-        serials = {p.serial_number or p.location or p.device for p in hits}
-        if len({s.rstrip(" AB") for s in serials}) == 1:  # one radio (IC-9700: ports A and B)
+        radios = {radio_key(p) for p in hits}
+        if len(radios) == 1:  # one radio (an IC-705 or IC-9700 has two ports)
             if model == "IC-9700":
                 hits = [p for p in hits if (p.serial_number or "").endswith(" A")] or hits
             return _pick(hits, match, model)
         if hits:
             raise PortNotFound(
-                f"{len(serials)} {model} radios connected; set match.usb_serial "
+                f"{len(radios)} {model} radios connected; set match.usb_serial "
                 "(radio-web-remote doctor lists them)"
             )
         raise PortNotFound(f"no {model} found on USB; check the cable and that it is on")

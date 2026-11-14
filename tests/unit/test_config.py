@@ -112,3 +112,26 @@ def test_yaml_syntax_error_is_a_config_error(tmp_path):
     f.write_text("server:\n  https_port: [\n")
     with pytest.raises(ValueError, match="not valid YAML"):
         load_config(f)
+
+
+def test_data_dir_config_is_found(tmp_path, monkeypatch):
+    """Review E2-6: --data-dir X uses X/config.yaml when no other is given."""
+    from radio_web_remote.config import find_config_file
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("RADIO_WEB_REMOTE_CONFIG", raising=False)
+    d = tmp_path / "data"
+    d.mkdir()
+    (d / "config.yaml").write_text("server:\n  https_port: 9443\n")
+    assert find_config_file(None, d) == d / "config.yaml"
+    assert load_config(None, d).server.https_port == 9443
+
+
+def test_config_errors_name_the_field(tmp_path):
+    """Review E2-7: not just '1 validation error for Config'."""
+    from radio_web_remote.config import ConfigError
+
+    f = tmp_path / "c.yaml"
+    f.write_text("server:\n  https_port: 99999\n")
+    with pytest.raises(ConfigError, match=r"server\.https_port"):
+        load_config(f)

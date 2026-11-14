@@ -59,7 +59,47 @@ MAX_MESSAGE = 4096
 DIAG_S = 5.0  # audio diagnostics window
 # Handled as they arrive; everything else queues for the per-connection worker.
 INLINE_MESSAGES = frozenset({"heartbeat", "ptt", "visibility", "audio", "audio_diag"})
-MAX_PENDING_CONTROLS = 16
+MAX_PENDING_CONTROLS = 16  # distinct pending controls (repeats of one coalesce)
+PTT_WAITS_FOR_CONTROLS_S = 2.0  # a key waits this long at most for earlier controls
+
+
+def _coalesce_key(msg: dict[str, Any]) -> str | None:
+    """Controls where only the newest value matters share a key; None = keep each."""
+    kind = msg.get("type")
+    if kind in ("set_frequency", "set_mode", "set_data_mode", "scope", "set_band", "set_dualwatch"):
+        return str(kind)
+    if kind == "set_level":
+        return f"set_level:{msg.get('level')}"
+    if kind == "set_scope":
+        return f"set_scope:{msg.get('setting')}"
+    return None  # e.g. swap_bands: two swaps are not one
+
+
+class _Controls:
+    """Pending radio controls for one connection, oldest first, coalesced: a spun
+    VFO queues one frequency (the latest), not every step, and the last value is
+    never the one dropped."""
+
+    def __init__(self) -> None:
+        self.pending: dict[str, dict[str, Any]] = {}
+        self.wake = asyncio.Event()
+        self.idle = asyncio.Event()  # set when nothing is pending or running
+        self.idle.set()
+        self._n = 0
+
+    def put(self, msg: dict[str, Any]) -> bool:
+        key = _coalesce_key(msg)
+        if key is None:
+            if len(self.pending) >= MAX_PENDING_CONTROLS:
+                return False
+            self._n += 1
+            key = f"#{self._n}"
+        self.pending[key] = msg  # an existing key keeps its place, with the new value
+        self.idle.clear()
+        self.wake.set()
+        return True
+
+
 _now = time.monotonic  # diagnostics clock (patched in tests)
 # Browser receive-audio diagnostics, per DIAG_S window (see static/js/audio.js).
 DIAG_FIELDS = ("frames", "lost", "late", "max_gap_ms", "max_lag_ms", "gaps", "skips", "target_ms")
@@ -89,7 +129,7 @@ class _Conn:
         self.audio_diag_t = 0.0
         self.client_diag_t = 0.0
         self.wake = asyncio.Event()
-        self.control: asyncio.Queue[dict[str, Any]] = asyncio.Queue(MAX_PENDING_CONTROLS)
+        self.control = _Controls()
 
     def push_state(self, state: dict[str, Any]) -> None:
         self.pending_state = state
@@ -259,16 +299,26 @@ class Hub:
         if task.cancelled():
             return
         exc = task.exception()
-        if exc is not None:
+        if exc is None:
+            return
+        if isinstance(exc, WebSocketDisconnect | RuntimeError):
+            # The socket closed under a send (client gone, or we closed it with 4001).
+            log.debug("connection %s helper ended: %r", conn.op.session_id, exc)
+        else:
             log.error("connection %s helper failed: %r", conn.op.session_id, exc)
-            self._keep(_close_quietly(conn.ws, 1011))
+        self._keep(_close_quietly(conn.ws, 1011))
 
     async def _control_worker(self, conn: _Conn, station: RadioStation) -> None:
         """Radio controls, one at a time, off the receive loop: a slow radio command
         must not hold up a PTT release or heartbeat on the same connection."""
+        c = conn.control
         while True:
-            msg = await conn.control.get()
-            await self._handle(conn, station, msg)
+            await c.wake.wait()
+            c.wake.clear()
+            while c.pending:
+                key = next(iter(c.pending))
+                await self._handle(conn, station, c.pending.pop(key))
+            c.idle.set()
 
     async def _sender(self, conn: _Conn) -> None:
         while True:
@@ -357,7 +407,7 @@ class Hub:
             try:
                 message = await asyncio.wait_for(conn.ws.receive(), IDLE_CLOSE_S)
             except TimeoutError:
-                await conn.ws.close(code=4000)
+                await _close_quietly(conn.ws, 4000)
                 return
             if message.get("type") == "websocket.disconnect":
                 raise WebSocketDisconnect(message.get("code", 1000))
@@ -377,11 +427,14 @@ class Hub:
                 conn.push({"type": "error", "code": "bad_json", "message": "invalid JSON"})
                 continue
             if msg.get("type") in INLINE_MESSAGES:
+                if msg.get("type") == "ptt" and msg.get("down") is True:
+                    # A key waits for controls sent before it (a power or band
+                    # change); a release never waits.
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(conn.control.idle.wait(), PTT_WAITS_FOR_CONTROLS_S)
                 await self._handle(conn, station, msg)
-            elif conn.control.full():
+            elif not conn.control.put(msg):
                 conn.push({"type": "error", "code": "busy", "message": "too many pending controls"})
-            else:
-                conn.control.put_nowait(msg)
 
     def _handle_binary(self, conn: _Conn, station: RadioStation, data: bytes) -> None:
         """Transmit audio from the browser. Silently ignored unless this tab holds TX."""
