@@ -306,6 +306,33 @@ def test_listen_only_audio_plays(page: Page, server):
     expect(page.locator("#au-start")).to_have_text("Start audio")
 
 
+def test_resume_audio_after_reopening(page: Page, server):
+    login(page, server)
+    expect(page.locator("#au-resume-bar")).to_be_hidden()
+    page.select_option("#au-mode", "monitor")
+    page.click("#au-start")
+    _audio_started(page)
+    page.reload()  # like reopening the home-screen app: audio needs a tap again
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(page.locator("#au-resume")).to_have_text("Resume audio: Listen only")
+    expect(page.locator("#au-mode")).to_have_value("monitor")
+    page.click("#au-resume")
+    _audio_started(page)
+    expect(page.locator("#au-resume-bar")).to_be_hidden()
+    page.click("#au-start")  # stopped on purpose: no offer next time
+    page.reload()
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(page.locator("#au-resume-bar")).to_be_hidden()
+    # "Not now" also clears the offer.
+    page.click("#au-start")
+    _audio_started(page)
+    page.reload()
+    page.click("#au-resume-no")
+    expect(page.locator("#au-resume-bar")).to_be_hidden()
+    page.reload()
+    expect(page.locator("#au-resume-bar")).to_be_hidden()
+
+
 def test_microphone_to_radio_while_keyed(page: Page, server, browser_name):
     if browser_name == "webkit":
         pytest.skip("Playwright WebKit has no fake microphone; covered by the iPhone/iPad pass")

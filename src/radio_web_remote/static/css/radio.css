@@ -11,6 +11,9 @@ button.small { min-height: 36px; padding: 0 10px; font-size: .9rem; background: 
 .small { font-size: .85rem; }
 .wrap { flex-wrap: wrap; }
 .hidden { display: none !important; }
+/* One tap to restart audio after the app is reopened (iOS needs a user gesture). */
+.resume { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 8px 12px; }
+.resume #au-resume { flex: 1; max-width: 420px; min-height: 48px; }
 
 .pill { font-size: .8rem; padding: 2px 10px; border-radius: 999px; background: rgba(255,255,255,.15); }
 .pill[data-state="up"] { background: var(--ok); color: #fff; }

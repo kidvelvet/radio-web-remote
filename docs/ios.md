@@ -33,8 +33,10 @@ Apple's rules for TLS server certificates on iOS 13 / macOS 10.15 and later
 
 ## Using it
 
-- Tap **Start audio** and allow the microphone when asked. iOS needs this tap
-  every time the page or app is opened.
+- Tap **Start audio** and allow the microphone when asked. iOS needs a tap
+  every time the page or app is opened: if audio was on when you left, the
+  page shows **Resume audio** at the top, which restarts it with the same
+  route in one tap. **Not now** hides it until audio is next started.
 - Works in a Safari tab and as a home-screen web app (both tested,
   docs/hardware-test.md IOS-2 and IOS-4).
 - When the app goes to the background, the screen locks or the network drops,

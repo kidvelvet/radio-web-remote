@@ -534,6 +534,9 @@ async function startAudio() {
     app.audioMode = mode;
     send({ type: "audio", mode });
     startDiag();
+    remember("rwr.audio.mode", mode);
+    remember("rwr.audio.on", "1");  // offer "Resume audio" if the page is reopened
+    $("au-resume-bar").classList.add("hidden");
     btn.textContent = "Stop audio";
     btn.classList.remove("primary");
     $("au-mode").disabled = true;
@@ -571,6 +574,7 @@ function stopDiag() { if (app.diagTimer) clearInterval(app.diagTimer); app.diagT
 
 async function stopAudio() {
   stopDiag();
+  remember("rwr.audio.on", "0");
   setPtt(false);
   send({ type: "audio", mode: null });
   app.audioMode = null;
@@ -612,6 +616,20 @@ function wireAudio() {
   fillDevices().catch(() => {});
   navigator.mediaDevices?.addEventListener?.("devicechange", () => fillDevices().catch(() => {}));
   $("au-start").addEventListener("click", () => (app.audioMode ? stopAudio() : startAudio()));
+  // Reopened after audio was on: restore the route and offer one tap to restart it.
+  // Browsers (iOS in particular) only start audio from a user gesture.
+  const mode = recall("rwr.audio.mode");
+  if ([...$("au-mode").options].some((o) => o.value === mode)) $("au-mode").value = mode;
+  if (recall("rwr.audio.on") === "1") {
+    const label = $("au-mode").selectedOptions[0]?.textContent || "";
+    $("au-resume").textContent = `Resume audio: ${label}`;
+    $("au-resume-bar").classList.remove("hidden");
+  }
+  $("au-resume").addEventListener("click", () => { if (!app.audioMode) startAudio(); });
+  $("au-resume-no").addEventListener("click", () => {
+    remember("rwr.audio.on", "0");
+    $("au-resume-bar").classList.add("hidden");
+  });
   $("au-vol").addEventListener("input", () => {
     const v = Number($("au-vol").value);
     $("au-vol-t").textContent = `${v}%`;
