@@ -120,7 +120,7 @@ def check_config(
             "warn",
             t,
             "no radios configured",
-            "Add the radio under `radios:` (see \"Not configured yet\").",
+            'Add the radio under `radios:` (see "Not configured yet").',
         )
     from radio_web_remote.radios import registry
 
