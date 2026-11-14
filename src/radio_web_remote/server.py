@@ -159,7 +159,11 @@ def _make_redirect(https_port: int) -> FastAPI:
 
     @app.api_route("/{path:path}", methods=["GET", "HEAD"])
     async def redirect(request: Request, path: str) -> RedirectResponse:
-        host = (request.headers.get("host") or "localhost").split(":")[0]
-        return RedirectResponse(f"https://{host}:{https_port}/{path}", status_code=308)
+        # request.url.hostname handles IPv6 literals ([fd00::1]:80) and drops the port.
+        host = request.url.hostname or "localhost"
+        if ":" in host:
+            host = f"[{host}]"
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(f"https://{host}:{https_port}/{path}{query}", status_code=308)
 
     return app

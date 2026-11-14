@@ -77,3 +77,38 @@ def test_empty_file_gives_defaults(tmp_path):
     f = tmp_path / "config.yaml"
     f.write_text("", encoding="utf-8")
     assert load_config(f) == Config()
+
+
+# -- review round 1 (docs/review-changelog.md) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"server": {"hostnames": ["https://radio.lan"]}},
+        {"server": {"hostnames": ["10.0.0.1"]}},  # addresses go in vpn_ips
+        {"server": {"hostnames": ["ràdio"]}},
+        {"server": {"https_port": 8443, "http_redirect": {"enabled": True, "port": 8443}}},
+        {"radios": [{"id": "r", "ptt_method": "dtr"}]},  # not implemented
+        {"radios": [{"id": "r", "civ_address": "E0"}]},  # same as the controller
+        {"radios": [{"id": "r", "audio": {"input_device": True}}]},
+        {"radios": [{"id": "r", "audio": {"output_device": -1}}]},
+    ],
+)
+def test_values_that_would_break_the_server_are_rejected(raw):
+    with pytest.raises(ValidationError):
+        Config.model_validate(raw)
+
+
+def test_blank_cert_paths_mean_unset():
+    cfg = Config.model_validate({"server": {"tls": {"cert_file": "", "key_file": " "}}})
+    assert cfg.server.tls.cert_file is None and cfg.server.tls.key_file is None
+    with pytest.raises(ValidationError):  # one without the other is still an error
+        Config.model_validate({"server": {"tls": {"cert_file": "a.pem", "key_file": ""}}})
+
+
+def test_yaml_syntax_error_is_a_config_error(tmp_path):
+    f = tmp_path / "config.yaml"
+    f.write_text("server:\n  https_port: [\n")
+    with pytest.raises(ValueError, match="not valid YAML"):
+        load_config(f)

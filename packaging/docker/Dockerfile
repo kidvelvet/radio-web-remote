@@ -11,6 +11,11 @@ RUN apt-get update \
 COPY . /src
 RUN pip install --no-cache-dir /src && rm -rf /src
 
+# Run as an ordinary user. dialout and audio (Debian's groups for serial and
+# sound devices) are added by compose's group_add.
+RUN useradd --create-home --uid 1000 radio && mkdir /data && chown radio /data
+USER radio
+
 # State (config.yaml, users, certificates, logs) lives in a volume.
 ENV RADIO_WEB_REMOTE_HOME=/data
 VOLUME ["/data"]

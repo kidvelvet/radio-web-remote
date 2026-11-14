@@ -166,8 +166,10 @@ class RadioDriver(ABC):
         """Request transmit. Returns False if an unkey overtook the request."""
 
     @abstractmethod
-    async def unkey(self, verify: bool = True) -> None:
-        """Stop transmitting, ahead of all queued traffic; with verify, confirm RX or raise."""
+    async def unkey(self, verify: bool = True) -> bool:
+        """Stop transmitting, ahead of all queued traffic; with verify, confirm RX or raise.
+
+        Returns False if a newer key or unkey took over before RX was confirmed."""
 
     # Optional controls: drivers override what their documents support.
     async def get_level(self, level: Level) -> int:

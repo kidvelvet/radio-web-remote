@@ -22,7 +22,8 @@ from typing import Any
 from radio_web_remote.audio.backend import AudioBackend
 from radio_web_remote.audio.router import AudioRouter
 from radio_web_remote.config import PttConfig, RadioConfig
-from radio_web_remote.devices.serial_ports import resolve_port
+from radio_web_remote.devices.serial_ports import model_for_driver, resolve_port
+from radio_web_remote.protocols.civ.commands import ReplyError
 from radio_web_remote.radios import registry
 from radio_web_remote.radios.base import (
     Feature,
@@ -32,9 +33,11 @@ from radio_web_remote.radios.base import (
     ModeSetting,
     RadioDriver,
     RadioError,
+    RadioRejected,
     RadioTimeout,
     ScopeLine,
     StateEvent,
+    Unsupported,
 )
 from radio_web_remote.station.tx_controller import (
     AuditSink,
@@ -59,6 +62,10 @@ class ControlDenied(PermissionError):
 
 class RadioLost(ConnectionError):
     pass
+
+
+STABLE_LINK_S = 10.0  # a link up this long resets the reconnect backoff
+NG_BEFORE_SKIP = 3  # a slow item answered NG this many times in a row is skipped
 
 
 @dataclass(frozen=True)
@@ -112,9 +119,9 @@ class _PttProxy:
         driver = self._station._live_driver()
         return await driver.key()
 
-    async def unkey(self, verify: bool = True) -> None:
+    async def unkey(self, verify: bool = True) -> bool:
         driver = self._station._live_driver()
-        await driver.unkey(verify)
+        return await driver.unkey(verify)
 
 
 class RadioStation:
@@ -153,6 +160,10 @@ class RadioStation:
         self._scope_wanted = False
         self._task: asyncio.Task[None] | None = None
         self._bg: set[asyncio.Task[None]] = set()
+        self._ng_counts: dict[str, int] = {}
+        self._recheck_hz: int | None = None
+        self._recheck_task: asyncio.Task[None] | None = None
+        self._connected_at = 0.0
         self.tx = TxController(
             cfg.id,
             _PttProxy(self),
@@ -173,7 +184,8 @@ class RadioStation:
 
     # -- lifecycle -------------------------------------------------------
     def _serial_factory(self) -> ByteTransport:
-        return SerialTransport(resolve_port(self.cfg.match), self.cfg.baud)
+        model = model_for_driver(self.cfg.driver)
+        return SerialTransport(resolve_port(self.cfg.match, model=model), self.cfg.baud)
 
     def _on_tx_status(self, status: TxStatus) -> None:
         if not status.transmitting:
@@ -212,6 +224,10 @@ class RadioStation:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+        for task in [*self._bg, *([self._recheck_task] if self._recheck_task else [])]:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         await self._drop_driver()
 
     @property
@@ -222,6 +238,10 @@ class RadioStation:
         if self._driver is None or not self._connected:
             raise RadioError(f"{self.cfg.id} is not connected")
         return self._driver
+
+    @staticmethod
+    def _loop_time() -> float:
+        return asyncio.get_running_loop().time()
 
     async def _run(self) -> None:
         delay = self._backoff[0]
@@ -236,7 +256,7 @@ class RadioStation:
                 self._update(connected=False, error=str(exc) or type(exc).__name__)
                 await self.tx.radio_lost()
                 await self._drop_driver()
-            if self._connected_once:
+            if self._connected_once and self._loop_time() - self._connected_at >= STABLE_LINK_S:
                 delay = self._backoff[0]  # it worked for a while: start backoff over
             await asyncio.sleep(delay)
             delay = min(delay * 2, self._backoff[1])
@@ -263,6 +283,7 @@ class RadioStation:
         mode = await driver.get_mode()
         self._connected = True
         self._connected_once = True
+        self._connected_at = self._loop_time()
         self._update(
             model=driver.model_name,
             connected=True,
@@ -330,6 +351,22 @@ class RadioStation:
         return self._writes.get(field, 0) == mark
 
     async def _poll_slow(self, driver: RadioDriver, item: Level | str) -> None:
+        """One slow item. An NG (or 'unsupported') answer skips the item, not the link."""
+        key = str(item)
+        if self._ng_counts.get(key, 0) >= NG_BEFORE_SKIP:
+            return
+        try:
+            await self._poll_slow_item(driver, item)
+        except (RadioRejected, Unsupported) as exc:
+            n = self._ng_counts[key] = self._ng_counts.get(key, 0) + 1
+            if n == NG_BEFORE_SKIP:
+                log.warning(
+                    "radio %s: %s refused %d times, no longer polled: %s", self.cfg.id, key, n, exc
+                )
+        else:
+            self._ng_counts.pop(key, None)
+
+    async def _poll_slow_item(self, driver: RadioDriver, item: Level | str) -> None:
         if isinstance(item, str) and item.startswith("scope:"):
             name = item.split(":", 1)[1]
             mark = self._writes.get(item, 0)
@@ -382,7 +419,7 @@ class RadioStation:
             wanted = tx if self.tx.status.transmitting else rx
             readings: dict[str, dict[str, Any]] = {}
             for m in wanted:
-                with contextlib.suppress(RadioTimeout):
+                with contextlib.suppress(RadioTimeout, RadioRejected, ReplyError):
                     readings[m.value] = _reading_json(await driver.get_meter(m))
             if readings:
                 self._update(meters=readings)
@@ -422,7 +459,8 @@ class RadioStation:
         if ev.kind == "frequency" and isinstance(ev.value, int):
             self._bump("frequency")
             self._update(frequency_hz=ev.value)
-            self._spawn(self.tx.frequency_changed(ev.value))
+            if self.tx.status.transmitting:
+                self._request_recheck(ev.value)
         elif ev.kind == "scope" and isinstance(ev.value, ScopeLine):
             for listener in list(self._scope_listeners):
                 try:
@@ -432,6 +470,20 @@ class RadioStation:
         elif ev.kind == "mode" and isinstance(ev.value, ModeSetting):
             self._bump("mode")
             self._update(mode=ev.value.mode.value, filter=ev.value.filter)
+
+    def _request_recheck(self, hz: int) -> None:
+        """Re-check TX limits after a front-panel retune; coalesce a fast VFO spin."""
+        self._recheck_hz = hz
+        if self._recheck_task is None or self._recheck_task.done():
+            self._recheck_task = asyncio.ensure_future(self._recheck_loop())
+
+    async def _recheck_loop(self) -> None:
+        while self._recheck_hz is not None:
+            hz, self._recheck_hz = self._recheck_hz, None
+            try:
+                await self.tx.frequency_changed(hz)
+            except Exception:
+                log.exception("TX limit recheck failed on %s", self.cfg.id)
 
     def _spawn(self, coro: Any) -> None:
         task: asyncio.Task[None] = asyncio.ensure_future(coro)
@@ -493,6 +545,10 @@ class RadioStation:
 
     async def set_frequency(self, op: Operator, hz: int) -> None:
         driver = self._require_control(op)
+        if self.tx.status.transmitting and not op.limits.allows_frequency(hz):
+            # Refuse before sending: retuning a keyed radio out of band would
+            # transmit there until the after-the-fact limit check stopped it.
+            raise ControlDenied(f"{hz} Hz is outside your bands while transmitting")
         self._bump("frequency")
         await driver.set_frequency(hz)
         self._bump("frequency")

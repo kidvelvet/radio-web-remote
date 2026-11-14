@@ -136,6 +136,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
     from radio_web_remote.station.tx_controller import Role
 
     cfg = load_config(args.config)
+    if args.password_stdin and not args.username:
+        print("error: --password-stdin needs --username", file=sys.stderr)
+        return 1
     store = _store(args)
     if store.count_admins() == 0:
         username = args.username or input("Admin username: ").strip()
@@ -164,6 +167,16 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _last_admin(store: Any, name: str) -> bool:
+    """True if `name` is the only enabled admin (count_admins counts enabled ones)."""
+    from radio_web_remote.station.tx_controller import Role
+
+    user = store.get_user(name)
+    return bool(
+        user and user.role is Role.ADMIN and not user.disabled and store.count_admins() <= 1
+    )
+
+
 def _cmd_user(args: argparse.Namespace) -> int:
     from radio_web_remote.security.users import UserError
     from radio_web_remote.station.tx_controller import Role, TxLimits
@@ -184,24 +197,20 @@ def _cmd_user(args: argparse.Namespace) -> int:
             store.set_password(args.name, _read_password(args, "New password"))
             print("Password changed; that user's sessions were ended.")
         elif args.user_command == "role":
-            if (
-                Role(args.role) is not Role.ADMIN
-                and store.get_user(args.name)
-                and store.get_user(args.name).role is Role.ADMIN
-                and store.count_admins() <= 1
-            ):
+            if Role(args.role) is not Role.ADMIN and _last_admin(store, args.name):
                 raise UserError("refusing to demote the last admin")
             store.set_role(args.name, Role(args.role), args.callsign)
             print("Role changed.")
         elif args.user_command in ("disable", "enable"):
+            if args.user_command == "disable" and _last_admin(store, args.name):
+                raise UserError("refusing to disable the last admin")
             store.set_disabled(args.name, args.user_command == "disable")
             print(f"{args.name} {args.user_command}d.")
         elif args.user_command == "unlock":
             store.unlock(args.name)
             print("Unlocked.")
         elif args.user_command == "delete":
-            user = store.get_user(args.name)
-            if user and user.role is Role.ADMIN and store.count_admins() <= 1:
+            if _last_admin(store, args.name):
                 raise UserError("refusing to delete the last admin")
             store.delete_user(args.name)
             print("Deleted.")
@@ -243,6 +252,8 @@ def _cmd_cert(args: argparse.Namespace) -> int:
     files, changed = ensure_certificates(cfg, _data_dir(args))
     print(f"TLS: {changed or 'no change'}")
     print("Server certificate names:", cert_sans(files.cert_file).describe())
+    if changed:
+        print("Restart the server to use the new certificate.")
     return 0
 
 
@@ -298,9 +309,11 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--address", help="CI-V address in hex, e.g. 94 (default: driver default)")
     probe.set_defaults(func=_cmd_probe)
 
-    def common(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--config", help="path to config.yaml")
-        sp.add_argument("--data-dir", help="state folder (default: per-OS app data folder)")
+    def common(sp: argparse.ArgumentParser, sub_level: bool = False) -> None:
+        # On a sub-subcommand, SUPPRESS keeps a value given before it.
+        kw: dict[str, Any] = {"default": argparse.SUPPRESS} if sub_level else {}
+        sp.add_argument("--config", help="path to config.yaml", **kw)
+        sp.add_argument("--data-dir", help="state folder (default: per-OS app data folder)", **kw)
 
     init = sub.add_parser("init", help="first run: create the admin account and certificates")
     common(init)
@@ -332,6 +345,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lim.add_argument("name")
     lim.add_argument("--bands", help="comma-separated low-high ranges in Hz; omit to clear")
+    for sp in us.choices.values():
+        common(sp, sub_level=True)
     user.set_defaults(func=_cmd_user)
 
     cert = sub.add_parser("cert", help="certificates")
@@ -340,6 +355,8 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_parser("show", help="renew if needed and list the server certificate's names")
     reset = cs.add_parser("reset", help="make a new local CA (devices must reinstall it)")
     reset.add_argument("--yes", action="store_true", help="do not ask")
+    for sp in cs.choices.values():
+        common(sp, sub_level=True)
     cert.set_defaults(func=_cmd_cert)
 
     aud = sub.add_parser("audio", help="audio tools")
@@ -364,5 +381,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    result: int = args.func(args)
+    try:
+        result: int = args.func(args)
+    except (ValidationError, ValueError) as exc:  # config errors, bad values
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except EOFError:
+        print("error: no terminal to ask on; use --username and --password-stdin", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
     return result

@@ -72,8 +72,12 @@ def test_simulator_frames_match_real_layout():
 def test_out_of_range_sweep_has_no_points():
     line = ScopeLine(14_000_000, 14_100_000, b"", 160, True, out_of_range=True)
     asm = sc.ScopeAssembler()
-    result = [asm.feed(b) for b in sc.sweep_frames(line, sc.MODE_FIXED, 0, 0)][-1]
-    assert result.out_of_range and result.points == b"" and asm.stats.out_of_range == 1
+    results = [asm.feed(b) for b in sc.sweep_frames(line, sc.MODE_FIXED, 0, 0)]
+    # The header says out of range: the line is complete at once (no waveform
+    # follows), and any empty divisions the radio still sends are ignored.
+    assert results[0].out_of_range and results[0].points == b""
+    assert results[1:] == [None] * 10
+    assert asm.stats.out_of_range == 1 and asm.stats.dropped == 0
 
 
 def test_points_clipped_to_documented_range():

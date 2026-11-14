@@ -130,3 +130,32 @@ def test_admin_count(store):
     assert store.count_admins() == 0
     store.create_user("root", PW, Role.ADMIN, "N0ADM")
     assert store.count_admins() == 1
+
+
+def test_concurrent_wrong_passwords_are_all_counted(store):
+    """Review C2: the failure count is atomic, so a burst cannot outrun the lockout."""
+    import concurrent.futures
+
+    def attempt(_):
+        try:
+            store.verify_login("alice", "wrong password here")
+        except (LoginFailed, LockedOut) as exc:
+            return type(exc).__name__
+        return "ok"
+
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        results = list(pool.map(attempt, range(u.LOCK_AFTER - 1)))
+    assert results == ["LoginFailed"] * (u.LOCK_AFTER - 1)
+    with pytest.raises(LockedOut):  # the next one is the LOCK_AFTER-th
+        store.verify_login("alice", "wrong password here")
+
+
+def test_unknown_names_lock_like_real_ones(store):
+    """Review C10: a 'locked' answer must not reveal which names exist."""
+    for _ in range(u.LOCK_AFTER - 1):
+        with pytest.raises(LoginFailed):
+            store.verify_login("nobody", "wrong password here")
+    with pytest.raises(LockedOut):
+        store.verify_login("nobody", "wrong password here")
+    with pytest.raises(LockedOut):
+        store.verify_login("nobody", PW)

@@ -13,6 +13,8 @@ moment the port opens, because pyserial asserts both lines by default.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import os
 import threading
 from typing import Any
 
@@ -33,6 +35,9 @@ class SerialTransport(ByteTransport):
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Writes (TX off among them) run on this port's own thread, never in the
+        # shared default executor, which a flood of password checks could fill.
+        self._io: concurrent.futures.ThreadPoolExecutor | None = None
 
     @staticmethod
     def _make_serial() -> Any:
@@ -51,7 +56,12 @@ class SerialTransport(ByteTransport):
         # Set before open() so the lines never go high, even briefly.
         ser.dtr = False
         ser.rts = False
-        await asyncio.to_thread(ser.open)
+        if os.name == "posix":
+            # Refuse a second opener (probe, doctor, another program) while the
+            # server has the radio: they would split its replies between them.
+            ser.exclusive = True
+        self._io = concurrent.futures.ThreadPoolExecutor(1, f"serial-io-{self.port}")
+        await self._loop.run_in_executor(self._io, ser.open)
         self._ser = ser
         self._stop.clear()
         self._thread = threading.Thread(
@@ -67,12 +77,15 @@ class SerialTransport(ByteTransport):
         if self._ser is not None:
             ser, self._ser = self._ser, None
             await asyncio.to_thread(ser.close)
+        if self._io is not None:
+            self._io.shutdown(wait=False)
+            self._io = None
 
     async def _write_impl(self, data: bytes) -> None:
         ser = self._ser
-        if ser is None:
+        if ser is None or self._io is None or self._loop is None:
             raise ConnectionError("serial port is closed")
-        await asyncio.to_thread(ser.write, data)
+        await self._loop.run_in_executor(self._io, ser.write, data)
 
     async def set_control_lines(self, *, dtr: bool | None = None, rts: bool | None = None) -> None:
         """Drive DTR/RTS (used for DTR/RTS PTT in P1). Goes through the write lock."""

@@ -7,6 +7,7 @@ and these defaults agree, so the two cannot drift apart.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from ipaddress import IPv4Address, IPv6Address
@@ -14,7 +15,14 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from radio_web_remote import paths
 
@@ -73,11 +81,28 @@ class TlsConfig(_Strict):
     # (support.apple.com/en-us/103769). 397 leaves room under that.
     server_cert_days: Annotated[int, Field(ge=30, le=825)] = 397
 
+    @field_validator("cert_file", "key_file", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, v: Any) -> Any:
+        return None if isinstance(v, str) and not v.strip() else v
+
     @model_validator(mode="after")
     def _both_or_neither(self) -> TlsConfig:
         if (self.cert_file is None) != (self.key_file is None):
             raise ValueError("server.tls.cert_file and key_file must be set together")
         return self
+
+
+_LABEL = r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOSTNAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(\.{_LABEL})*$")
+
+
+def _looks_like_ip(name: str) -> bool:
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
 
 
 class ServerConfig(_Strict):
@@ -88,6 +113,23 @@ class ServerConfig(_Strict):
     hostnames: list[str] = Field(default_factory=list)
     vpn_ips: list[IPv4Address | IPv6Address] = Field(default_factory=list)
     tls: TlsConfig = Field(default_factory=TlsConfig)
+
+    @field_validator("hostnames")
+    @classmethod
+    def _hostnames(cls, names: list[str]) -> list[str]:
+        for n in names:
+            if not _HOSTNAME.match(n) or _looks_like_ip(n):
+                raise ValueError(
+                    f"hostname {n!r}: use a DNS name (letters, digits, '-', dots); "
+                    "put addresses in vpn_ips"
+                )
+        return names
+
+    @model_validator(mode="after")
+    def _ports_differ(self) -> ServerConfig:
+        if self.http_redirect.enabled and self.http_redirect.port == self.https_port:
+            raise ValueError("http_redirect.port must differ from https_port")
+        return self
 
 
 class PttConfig(_Strict):
@@ -108,7 +150,8 @@ class SerialMatch(_Strict):
     """How to find the radio's CI-V serial port.
 
     Prefer usb_serial or usb_location: COM numbers and /dev/tty* names change
-    when the cable moves to another USB port. All empty means auto-detect.
+    when the cable moves to another USB port. All empty: the one connected
+    radio of the configured model (radio-web-remote doctor names it).
     """
 
     usb_serial: str | None = None
@@ -116,7 +159,15 @@ class SerialMatch(_Strict):
     port: str | None = None
 
 
-DeviceRef = Annotated[str | int, Field()] | None
+def _device_ref(v: Any) -> Any:
+    if isinstance(v, bool):
+        raise ValueError("audio device: give a name, an index from `audio devices`, or auto")
+    if isinstance(v, int) and v < 0:
+        raise ValueError("audio device index must be 0 or more")
+    return v
+
+
+DeviceRef = Annotated[str | int | None, BeforeValidator(_device_ref)]
 
 
 class RadioAudioConfig(_Strict):
@@ -156,7 +207,8 @@ class RadioConfig(_Strict):
     # Silent at civ_address? Find the radio by one broadcast read ID and use
     # the address that answers (a menu setting or PRESET can change it, H705-1).
     auto_detect_address: bool = True
-    ptt_method: Literal["civ", "dtr", "rts"] = "civ"
+    # Only CI-V PTT is implemented in 0.1; DTR/RTS keying is planned.
+    ptt_method: Literal["civ"] = "civ"
     audio: RadioAudioConfig = Field(default_factory=RadioAudioConfig)
 
     @field_validator("id")
@@ -164,6 +216,19 @@ class RadioConfig(_Strict):
     def _id_is_slug(cls, v: str) -> str:
         if not _RADIO_ID.match(v):
             raise ValueError("radio id must be lowercase letters, digits, '-' or '_' (max 32)")
+        return v
+
+    @model_validator(mode="after")
+    def _distinct_addresses(self) -> RadioConfig:
+        if self.civ_address is not None and self.civ_address == self.controller_address:
+            raise ValueError("civ_address and controller_address must differ")
+        return self
+
+    @field_validator("ptt_method", mode="before")
+    @classmethod
+    def _ptt_method(cls, v: Any) -> Any:
+        if v in ("dtr", "rts"):
+            raise ValueError("ptt_method dtr/rts is not implemented yet; use civ")
         return v
 
     @field_validator("civ_address", "controller_address", mode="before")
@@ -218,7 +283,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     if file is None:
         return Config()
     with open(file, encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh)
+        try:
+            raw = yaml.safe_load(fh)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"{file}: not valid YAML: {exc}") from None
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):

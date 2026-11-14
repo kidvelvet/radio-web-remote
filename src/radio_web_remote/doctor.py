@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import os
 import platform
-import re
 import socket
 import sys
 from collections.abc import Callable
@@ -23,18 +23,17 @@ from typing import Literal
 from radio_web_remote import __version__
 from radio_web_remote.audio.devices import CODEC_NAME, AudioDevice, AudioDeviceError, resolve
 from radio_web_remote.config import Config, RadioConfig
-from radio_web_remote.devices.serial_ports import PortInfo, PortNotFound, resolve_port
+from radio_web_remote.devices.serial_ports import (
+    DRIVER_FOR,
+    PortInfo,
+    PortNotFound,
+    model_for_driver,
+    model_of,
+    resolve_port,
+)
 from radio_web_remote.transport.base import ByteTransport
 
 Level = Literal["ok", "warn", "fail", "info"]
-
-# Recognising radios on the USB bus. Observed on hardware, 2026-11-13
-# (docs/hardware-test.md): IC-7300 serial "IC-7300 <serial>" on a CP2102;
-# IC-9700 "IC-9700 <serial> A"/"... B" on two CP2102N; IC-705 VID:PID 0C26:0036,
-# two ports with the same serial "IC-705 <serial>".
-_MODEL_IN_SERIAL = re.compile(r"\b(IC-\d{3,4})\b", re.IGNORECASE)
-_DRIVER_FOR = {"IC-7300": "icom.ic7300", "IC-705": "icom.ic705", "IC-9700": "icom.ic9700"}
-_USB_IDS = {(0x0C26, 0x0036): "IC-705"}
 
 
 @dataclass
@@ -71,18 +70,6 @@ class Report:
         else:
             lines.append("\nNothing to fix.")
         return "\n".join(lines).lstrip("\n")
-
-
-def model_of(port: PortInfo) -> str | None:
-    """Radio model a serial port belongs to, from its USB serial string or IDs."""
-    m = _MODEL_IN_SERIAL.search(port.serial_number or "") or _MODEL_IN_SERIAL.search(
-        port.description
-    )
-    if m:
-        return m.group(1).upper()
-    if port.vid is not None and port.pid is not None:
-        return _USB_IDS.get((port.vid, port.pid))
-    return None
 
 
 # -- host and config -------------------------------------------------------------
@@ -190,16 +177,27 @@ def check_listen_port(report: Report, cfg: Config) -> bool:
     t = "Network"
     host, port = cfg.server.bind_address, cfg.server.https_port
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as s:
+        if os.name != "nt":  # as uvicorn does: a just-stopped server's TIME_WAIT is not "in use"
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((host, port))
-        except OSError:
+        except OSError as exc:
+            if exc.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", -1)):
+                report.add(
+                    "warn",
+                    t,
+                    f"port {port} on {host} is in use (is the server already running?)",
+                    "Stop the running server so doctor can test the radio, or change https_port.",
+                )
+                return False
             report.add(
-                "warn",
+                "fail",
                 t,
-                f"port {port} on {host} is in use (is the server already running?)",
-                "Stop the running server so doctor can test the radio, or change https_port.",
+                f"cannot listen on {host}:{port}: {exc.strerror or exc}",
+                "Check server.bind_address (an address of this computer, or 0.0.0.0) "
+                "and https_port (above 1023 unless run as root).",
             )
-            return False
+            return True  # the server could not start either, but the radio can be checked
     report.add("ok", t, f"https_port {port} is free on {host}")
     return True
 
@@ -237,31 +235,40 @@ def check_audio(report: Report, devices: list[AudioDevice]) -> None:
         report.add("info", t, f"{d.index}: {d.name}  in {d.inputs}  out {d.outputs}  {d.host_api}")
 
 
+def _radio_key(p: PortInfo) -> str:
+    """One radio's identity across its ports (the IC-9700's ports end in A and B)."""
+    serial = p.serial_number or p.location or p.device
+    return serial.rstrip(" AB") if model_of(p) == "IC-9700" else serial
+
+
 def suggest_radios(report: Report, cfg: Config, ports: list[PortInfo]) -> None:
     """Config snippets for detected radios that no radio entry matches."""
+    by_device = {p.device: p for p in ports}
     configured: set[str] = set()
     for rc in cfg.radios:
         with contextlib.suppress(PortNotFound):
-            configured.add(resolve_port(rc.match, ports))
+            device = resolve_port(rc.match, ports, model_for_driver(rc.driver))
+            if device in by_device:
+                configured.add(_radio_key(by_device[device]))
     seen: set[str] = set()
     for p in sorted(ports, key=lambda p: p.device):
         model = model_of(p)
-        if not model or p.device in configured or not p.serial_number:
+        if not model or not p.serial_number:
             continue
-        key = p.serial_number.rstrip(" AB") if model == "IC-9700" else p.serial_number
-        if key in seen:
-            continue  # the radio's second port
-        seen.add(key)
+        key = _radio_key(p)
+        if key in configured or key in seen:
+            continue  # configured already, or the radio's second port
         serial = p.serial_number
         if model == "IC-9700" and not serial.endswith(" A"):
-            continue  # IC-9700: port A carries CI-V (Basic Manual 8-16)
+            continue  # IC-9700: port A carries CI-V (Basic Manual 8-16); wait for it
+        seen.add(key)
         report.add(
             "info",
             "Not configured yet",
             f"{model} on {p.device}. Add to config.yaml:\n"
             f"    radios:\n"
             f"      - id: {model.lower().replace('-', '')}\n"
-            f"        driver: {_DRIVER_FOR.get(model, '?')}\n"
+            f"        driver: {DRIVER_FOR.get(model, '?')}\n"
             f"        match:\n"
             f'          usb_serial: "{serial}"',
         )
@@ -304,7 +311,7 @@ async def check_radio(
     from radio_web_remote.radios.base import RadioError
 
     try:
-        port = resolve_port(rc.match, ports)
+        port = resolve_port(rc.match, ports, model_for_driver(rc.driver))
     except PortNotFound as exc:
         report.add(
             "fail",

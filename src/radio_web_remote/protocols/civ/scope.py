@@ -79,6 +79,13 @@ class ScopeAssembler:
     _max_div: int = 0
     _buf: bytearray = field(default_factory=bytearray)
 
+    def _clip_table(self) -> bytes:
+        table = self.__dict__.get("_clip")
+        if table is None:
+            table = bytes(min(i, self.max_value) for i in range(256))
+            self.__dict__["_clip"] = table
+        return table
+
     def _drop(self) -> None:
         if self._header is not None:
             self.stats.dropped += 1
@@ -104,7 +111,9 @@ class ScopeAssembler:
                 low, high = a, b  # Fixed, and the undocumented 02/03
             self._header = (mode, low, high, out_of_range)
             self._expect, self._max_div = 2, max_div
-            if max_div == 1:
+            if max_div == 1 or out_of_range:
+                # Out of range: no waveform follows (manual), so do not wait
+                # for divisions the radio may not send.
                 return self._finish()
             return None
         if self._header is None or div != self._expect or max_div != self._max_div:
@@ -129,7 +138,7 @@ class ScopeAssembler:
             self.stats.dropped += 1
             return None
         self.stats.lines += 1
-        clipped = bytes(min(p, self.max_value) for p in points)
+        clipped = points.translate(self._clip_table())
         return ScopeLine(low, high, clipped, self.max_value, mode != MODE_CENTER, out_of_range)
 
 

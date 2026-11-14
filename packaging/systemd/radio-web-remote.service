@@ -1,5 +1,5 @@
-# systemd user service for radio-web-remote. install.sh --service writes this
-# to ~/.config/systemd/user/ with @EXE@ filled in, then enables it.
+# systemd user service for radio-web-remote, as install.sh --service writes it
+# to ~/.config/systemd/user/ (with the program and data paths filled in).
 #
 # Manage:   systemctl --user status|restart|stop radio-web-remote
 # Logs:     journalctl --user -u radio-web-remote
@@ -14,9 +14,14 @@
 [Unit]
 Description=radio-web-remote (browser remote for amateur radio transceivers)
 After=network-online.target sound.target
+# A crash loop (no init yet, a config error) stops after 10 tries in 5 minutes.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 ExecStart=@EXE@ serve
+# The data folder, so a stray ./config.yaml in the home folder is not picked up.
+WorkingDirectory=@DATA@
 Restart=always
 RestartSec=3
 

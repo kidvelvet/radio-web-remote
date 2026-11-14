@@ -117,6 +117,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Installers install the version in pyproject.toml
+        shell: bash
+        run: |
+          v=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          grep -q "^VERSION=\"$v\"" packaging/install.sh
+          grep -qE "^[[:space:]]*[$]Version = \"$v\"" packaging/install.ps1
+
       # PortAudio, plus a virtual sound card: the runner has no audio server,
       # and doctor (rightly) fails when PortAudio cannot start.
       - name: PortAudio and a virtual sound card (Linux)
@@ -134,7 +141,8 @@ jobs:
           RWR_BIN: ${{ runner.temp }}/bin
           PYTHON: python
         run: |
-          sh packaging/install.sh
+          # Piped, as the one-line install runs it (no packaging/ folder beside it).
+          cat packaging/install.sh | sh
           python tools/install_smoke.py "$RWR_BIN/radio-web-remote"
           sh packaging/install.sh --uninstall
           test ! -e "$RWR_BIN/radio-web-remote"
@@ -147,7 +155,8 @@ jobs:
           RWR_PREFIX: ${{ runner.temp }}\rwr
           RWR_PYTHON: python
         run: |
-          ./packaging/install.ps1
+          # Through Invoke-Expression, as `irm ... | iex` runs it.
+          Get-Content packaging/install.ps1 -Raw | Invoke-Expression
           python tools/install_smoke.py "$env:RWR_PREFIX\venv\Scripts\radio-web-remote.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./packaging/install.ps1 -Uninstall

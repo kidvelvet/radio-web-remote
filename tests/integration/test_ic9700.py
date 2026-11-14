@@ -146,3 +146,14 @@ async def test_tx_limits_follow_the_transmitting_band(rig):
         assert not sim.state.transmitting
     finally:
         await tx.close()
+
+
+async def test_swap_is_not_retried(rig):
+    """Review A2: 07 B0 is not idempotent; a retry after a lost FB would swap back."""
+    from radio_web_remote.radios.base import RadioTimeout
+
+    driver, sim = rig
+    sim.silent = True
+    with pytest.raises(RadioTimeout):
+        await driver.swap_bands()
+    assert [f.payload for f in sim.received].count(b"\x07\xb0") == 1

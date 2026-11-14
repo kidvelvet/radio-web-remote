@@ -41,6 +41,35 @@ class PortNotFound(LookupError):
     pass
 
 
+# Recognising radios on the USB bus. Observed on hardware, 2026-11-13
+# (docs/hardware-test.md): IC-7300 serial "IC-7300 <serial>" on a CP2102;
+# IC-9700 "IC-9700 <serial> A"/"... B" on two CP2102N; IC-705 VID:PID 0C26:0036,
+# two ports with the same serial "IC-705 <serial>".
+_MODEL_IN_SERIAL = re.compile(r"\b(IC-\d{3,4})\b", re.IGNORECASE)
+DRIVER_FOR = {"IC-7300": "icom.ic7300", "IC-705": "icom.ic705", "IC-9700": "icom.ic9700"}
+_USB_IDS = {(0x0C26, 0x0036): "IC-705"}
+
+
+def model_of(port: PortInfo) -> str | None:
+    """Radio model a serial port belongs to, from its USB serial string or IDs."""
+    m = _MODEL_IN_SERIAL.search(port.serial_number or "") or _MODEL_IN_SERIAL.search(
+        port.description
+    )
+    if m:
+        return m.group(1).upper()
+    if port.vid is not None and port.pid is not None:
+        return _USB_IDS.get((port.vid, port.pid))
+    return None
+
+
+def model_for_driver(driver: str) -> str | None:
+    """'icom.ic9700' -> 'IC-9700', the name model_of() gives that radio's ports."""
+    for model, name in DRIVER_FOR.items():
+        if name == driver:
+            return model
+    return None
+
+
 log = logging.getLogger(__name__)
 _CIV_PORT = re.compile(r"\(CI-V\)|Serial Port A\b", re.IGNORECASE)
 
@@ -86,7 +115,11 @@ def list_serial_ports() -> list[PortInfo]:
     return ports
 
 
-def resolve_port(match: SerialMatch, ports: list[PortInfo] | None = None) -> str:
+def resolve_port(
+    match: SerialMatch, ports: list[PortInfo] | None = None, model: str | None = None
+) -> str:
+    """The radio's CI-V port. With nothing in `match`, the one connected radio of
+    `model` (e.g. "IC-7300")."""
     ports = list_serial_ports() if ports is None else ports
     if match.usb_serial:
         hits = [p for p in ports if p.serial_number == match.usb_serial]
@@ -100,4 +133,17 @@ def resolve_port(match: SerialMatch, ports: list[PortInfo] | None = None) -> str
         raise PortNotFound(f"no serial port at USB location {match.usb_location!r}")
     if match.port:
         return match.port
+    if model:
+        hits = [p for p in ports if model_of(p) == model]
+        serials = {p.serial_number or p.location or p.device for p in hits}
+        if len({s.rstrip(" AB") for s in serials}) == 1:  # one radio (IC-9700: ports A and B)
+            if model == "IC-9700":
+                hits = [p for p in hits if (p.serial_number or "").endswith(" A")] or hits
+            return _pick(hits, match, model)
+        if hits:
+            raise PortNotFound(
+                f"{len(serials)} {model} radios connected; set match.usb_serial "
+                "(radio-web-remote doctor lists them)"
+            )
+        raise PortNotFound(f"no {model} found on USB; check the cable and that it is on")
     raise PortNotFound("radio has no usb_serial, usb_location or port configured")

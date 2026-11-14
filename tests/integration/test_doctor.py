@@ -113,3 +113,33 @@ def test_busy_https_port_is_reported():
         r = doctor.Report()
         assert doctor.check_listen_port(r, cfg) is False
         assert r.findings[0].level == "warn"
+
+
+def test_bind_failure_other_than_in_use_is_not_reported_as_running():
+    """Review E1: an address that is not on this computer is a config problem."""
+    cfg = Config.model_validate({"server": {"bind_address": "192.0.2.1", "https_port": 8473}})
+    r = doctor.Report()
+    assert doctor.check_listen_port(r, cfg) is True  # radio checks still run
+    assert r.findings[0].level == "fail" and "in use" not in r.findings[0].text
+
+
+def test_suggestions_identify_radios_not_ports():
+    """Review E9: IC-9700 port B sorting first; and a configured IC-705 on port A
+    must not get a second suggestion for its port B."""
+    nine_b_first = PortInfo(
+        "/dev/cu.a-10", "CP2102N", "IC-9700 33333333 B", "0-1.4", 0x10C4, 0xEA60
+    )
+    nine_a = PortInfo("/dev/cu.b-20", "CP2102N", "IC-9700 33333333 A", "0-1.3", 0x10C4, 0xEA60)
+    r = doctor.Report()
+    doctor.suggest_radios(r, Config(), [nine_b_first, nine_a])
+    assert len(r.findings) == 1 and 'usb_serial: "IC-9700 33333333 A"' in r.findings[0].text
+    cfg = Config.model_validate(
+        {
+            "radios": [
+                {"id": "ic705", "driver": "icom.ic705", "match": {"usb_serial": "IC-705 22222222"}}
+            ]
+        }
+    )
+    r = doctor.Report()
+    doctor.suggest_radios(r, cfg, [IC705_A, IC705_B])
+    assert r.findings == []

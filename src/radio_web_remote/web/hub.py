@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import functools
 import itertools
 import json
 import logging
@@ -56,6 +57,9 @@ log = logging.getLogger(__name__)
 
 MAX_MESSAGE = 4096
 DIAG_S = 5.0  # audio diagnostics window
+# Handled as they arrive; everything else queues for the per-connection worker.
+INLINE_MESSAGES = frozenset({"heartbeat", "ptt", "visibility", "audio", "audio_diag"})
+MAX_PENDING_CONTROLS = 16
 _now = time.monotonic  # diagnostics clock (patched in tests)
 # Browser receive-audio diagnostics, per DIAG_S window (see static/js/audio.js).
 DIAG_FIELDS = ("frames", "lost", "late", "max_gap_ms", "max_lag_ms", "gaps", "skips", "target_ms")
@@ -85,6 +89,7 @@ class _Conn:
         self.audio_diag_t = 0.0
         self.client_diag_t = 0.0
         self.wake = asyncio.Event()
+        self.control: asyncio.Queue[dict[str, Any]] = asyncio.Queue(MAX_PENDING_CONTROLS)
 
     def push_state(self, state: dict[str, Any]) -> None:
         self.pending_state = state
@@ -112,6 +117,7 @@ class Hub:
         self.ptt = ptt
         self._conns: dict[str, _Conn] = {}
         self._ids = itertools.count(1)
+        self._tasks: set[asyncio.Task[None]] = set()
         self._listeners: dict[str, Callable[[RadioState], None]] = {}
         self._scope_listeners: dict[str, Callable[[Any], None]] = {}
         self._audio_listeners: dict[str, Callable[[bytes], None]] = {}
@@ -207,6 +213,9 @@ class Hub:
         conn.push_state(station.state.to_json())
         sender = asyncio.create_task(self._sender(conn))
         checker = asyncio.create_task(self._revalidate(conn, revalidate))
+        worker = asyncio.create_task(self._control_worker(conn, station))
+        for t in (sender, checker, worker):
+            t.add_done_callback(functools.partial(self._helper_done, conn))
         try:
             await self._receive(conn, station)
         except WebSocketDisconnect:
@@ -216,16 +225,50 @@ class Hub:
         finally:
             self._conns.pop(conn_id, None)
             station.audio.remove(conn_id)
-            if conn.scope_on:
-                await asyncio.shield(self._update_scope_demand(radio_id))
-            # Server-side fail-safe: a closed connection never keeps the transmitter.
-            # Shielded: this handler is often being cancelled when we get here.
-            await asyncio.shield(station.tx.client_gone(conn_id, StopReason.CONNECTION_CLOSED))
-            for t in (sender, checker):
+            for t in (sender, checker, worker):
                 t.cancel()
+            # Server-side fail-safe: a closed connection never keeps the transmitter.
+            # Started as a task before any await: this handler is often being
+            # cancelled here, and a cancelled await would skip what follows.
+            teardown = self._keep(self._teardown(conn, station))
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(teardown)
             with contextlib.suppress(Exception):
                 if ws.client_state is WebSocketState.CONNECTED:
                     await ws.close()
+
+    async def _teardown(self, conn: _Conn, station: RadioStation) -> None:
+        """Unkey first, then anything else that talks to the radio."""
+        await station.tx.client_gone(conn.op.session_id, StopReason.CONNECTION_CLOSED)
+        if conn.scope_on:
+            try:
+                await self._update_scope_demand(conn.radio_id)
+            except Exception:
+                log.warning("scope demand update failed for %s", conn.radio_id, exc_info=True)
+
+    def _keep(self, coro: Any) -> asyncio.Task[None]:
+        """Run a task to completion even if its caller goes away; keep a reference."""
+        task: asyncio.Task[None] = asyncio.ensure_future(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    def _helper_done(self, conn: _Conn, task: asyncio.Task[None]) -> None:
+        """A per-connection helper ended on its own: close the socket, which runs
+        the normal teardown (unkey included), rather than leave a half-dead client."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("connection %s helper failed: %r", conn.op.session_id, exc)
+            self._keep(_close_quietly(conn.ws, 1011))
+
+    async def _control_worker(self, conn: _Conn, station: RadioStation) -> None:
+        """Radio controls, one at a time, off the receive loop: a slow radio command
+        must not hold up a PTT release or heartbeat on the same connection."""
+        while True:
+            msg = await conn.control.get()
+            await self._handle(conn, station, msg)
 
     async def _sender(self, conn: _Conn) -> None:
         while True:
@@ -237,16 +280,18 @@ class Hub:
             conn.scope_lines.clear()
             audio = list(conn.audio_frames)
             conn.audio_frames.clear()
+            # Control before audio: on a slow link, state and errors must not
+            # queue behind half a second of audio.
+            for m in msgs:
+                await conn.ws.send_text(json.dumps(m))
+            if state is not None:
+                await conn.ws.send_text(json.dumps({"type": "state", "state": state}))
             for af in audio:
                 t0 = time.monotonic()
                 await conn.ws.send_bytes(af)
                 conn.audio_max_send_s = max(conn.audio_max_send_s, time.monotonic() - t0)
             if audio:
                 self._audio_diag(conn)
-            for m in msgs:
-                await conn.ws.send_text(json.dumps(m))
-            if state is not None:
-                await conn.ws.send_text(json.dumps({"type": "state", "state": state}))
             for frame in lines:
                 await conn.ws.send_bytes(frame)
 
@@ -295,7 +340,12 @@ class Hub:
     async def _revalidate(self, conn: _Conn, revalidate: Revalidate) -> None:
         while True:
             await asyncio.sleep(REVALIDATE_S)
-            if await revalidate(conn.ws) is None:
+            try:
+                session = await revalidate(conn.ws)
+            except Exception:  # e.g. sqlite busy while the CLI writes: try again next time
+                log.warning("session check failed for %s", conn.op.session_id, exc_info=True)
+                continue
+            if session is None:
                 await self.stations[conn.radio_id].tx.client_gone(
                     conn.op.session_id, StopReason.LOGGED_OUT
                 )
@@ -326,7 +376,12 @@ class Hub:
             except ValueError:
                 conn.push({"type": "error", "code": "bad_json", "message": "invalid JSON"})
                 continue
-            await self._handle(conn, station, msg)
+            if msg.get("type") in INLINE_MESSAGES:
+                await self._handle(conn, station, msg)
+            elif conn.control.full():
+                conn.push({"type": "error", "code": "busy", "message": "too many pending controls"})
+            else:
+                conn.control.put_nowait(msg)
 
     def _handle_binary(self, conn: _Conn, station: RadioStation, data: bytes) -> None:
         """Transmit audio from the browser. Silently ignored unless this tab holds TX."""
@@ -387,8 +442,8 @@ class Hub:
                 checks = {
                     # The driver checks these against the model's own table.
                     "mode": lambda v: v in ("center", "fixed", "scroll-c", "scroll-f"),
-                    "span": lambda v: isinstance(v, int) and not isinstance(v, bool),
-                    "edge": lambda v: v in (1, 2, 3, 4) and not isinstance(v, bool),
+                    "span": lambda v: type(v) is int,
+                    "edge": lambda v: type(v) is int and v in (1, 2, 3, 4),
                     "hold": lambda v: isinstance(v, bool),
                     "ref": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
                     "speed": lambda v: v in ("fast", "mid", "slow"),
@@ -407,7 +462,7 @@ class Hub:
             elif kind == "set_mode":
                 mode = Mode(str(msg.get("mode")))
                 flt = msg.get("filter")
-                if flt is not None and flt not in (1, 2, 3):
+                if flt is not None and (type(flt) is not int or flt not in (1, 2, 3)):
                     raise ValueError("filter must be 1, 2, 3 or null")
                 await station.set_mode(op, ModeSetting(mode, flt))
             elif kind == "set_level":
@@ -431,3 +486,8 @@ class Hub:
             conn.push({"type": "error", "code": "radio", "message": str(exc)})
         except ValueError as exc:
             conn.push({"type": "error", "code": "bad_request", "message": str(exc)})
+
+
+async def _close_quietly(ws: WebSocket, code: int) -> None:
+    with contextlib.suppress(Exception):
+        await ws.close(code=code)

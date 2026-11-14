@@ -34,9 +34,9 @@ transmits in voice modes. Change it back for local operation.
 - **CI-V (default).** The server keys with CI-V command 1C 00. If the server
   process dies while keyed, the radio stays keyed until the restarted server
   sends TX off (tested, H7300-4). Turn on Time-Out Timer (CI-V) as a backstop.
-- **DTR or RTS** (set USB SEND to match `ptt_method`). The server holds both
-  lines low from the moment it opens the port (tested, H7300-3). Whether the
-  operating system drops the line when the process dies is not yet tested.
+- **DTR or RTS** keying is not implemented in 0.1 (`ptt_method` accepts only
+  `civ`). Leave USB SEND at OFF. The server holds both lines low from the
+  moment it opens the port anyway (tested, H7300-3).
 
 ### On the computer (macOS)
 

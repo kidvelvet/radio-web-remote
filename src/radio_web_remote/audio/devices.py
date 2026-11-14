@@ -1,6 +1,10 @@
 """Find audio devices by config reference: "auto", a name substring, or an index.
 
-"auto" means the only device named "USB Audio CODEC" for that direction.
+"auto" means the only device for that direction whose name contains
+"USB Audio CODEC" (PortAudio decorates it on Linux, e.g. "USB Audio CODEC:
+USB Audio (hw:2,0)", and Windows, e.g. "Microphone (USB Audio CODEC)"; TODO(verify)
+on those systems). Windows lists each device once per host API, so several
+matches are narrowed to the default host API before being called ambiguous.
 The IC-7300 codec appears under that name on macOS (observed 2026-11-13,
 manufacturer "Burr-Brown from TI"), and the brief notes Windows shows a
 generic "USB Audio CODEC" too, so names alone cannot tell two radios apart.
@@ -53,7 +57,12 @@ def _usable(d: AudioDevice, direction: Direction) -> bool:
     return (d.inputs if direction == "input" else d.outputs) > 0
 
 
-def resolve(ref: str | int | None, direction: Direction, devices: list[AudioDevice]) -> int | None:
+def resolve(
+    ref: str | int | None,
+    direction: Direction,
+    devices: list[AudioDevice],
+    preferred_api: str | None = None,
+) -> int | None:
     if ref is None:
         return None
     candidates = [d for d in devices if _usable(d, direction)]
@@ -62,11 +71,13 @@ def resolve(ref: str | int | None, direction: Direction, devices: list[AudioDevi
             return ref
         raise AudioDeviceError(f"no {direction} device with index {ref}")
     if ref == "auto":
-        hits = [d for d in candidates if d.name == CODEC_NAME]
+        hits = [d for d in candidates if CODEC_NAME.lower() in d.name.lower()]
         what = f'"{CODEC_NAME}"'
     else:
         hits = [d for d in candidates if ref.lower() in d.name.lower()]
         what = repr(ref)
+    if len(hits) > 1 and preferred_api:
+        hits = [d for d in hits if d.host_api == preferred_api] or hits
     if len(hits) == 1:
         return hits[0].index
     names = ", ".join(f"{d.index}: {d.name}" for d in candidates) or "none"

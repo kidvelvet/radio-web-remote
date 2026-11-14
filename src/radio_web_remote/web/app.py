@@ -15,9 +15,12 @@ and /static assets. Everything else needs a session cookie.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hmac
+import ipaddress
 import logging
 import secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -43,6 +46,7 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 SESSION_COOKIE = "rwr_session"
 LOGIN_CSRF_COOKIE = "rwr_login_csrf"
+AUDIT_THROTTLE_S = 60.0
 
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -85,6 +89,23 @@ def _client_ip(request: Request | WebSocket) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _limit_key(ip: str) -> str:
+    """Rate-limit key: the address, or its /64 for IPv6 (a host can rotate inside it)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6 and not addr.is_loopback:
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return ip
+
+
+# Password hashing runs here, not in the default executor that other blocking
+# work shares; at most this many at once, however many logins arrive.
+_LOGIN_WORKERS = 2
+_login_pool = concurrent.futures.ThreadPoolExecutor(_LOGIN_WORKERS, "login")
+
+
 def _cookie_args() -> dict[str, Any]:
     return {"secure": True, "httponly": True, "samesite": "strict", "path": "/"}
 
@@ -117,6 +138,22 @@ def create_app(
     def audit_event(event: str, **fields: Any) -> None:
         if ctx.audit is not None:
             ctx.audit({"event": event, **fields})
+
+    throttle: dict[str, tuple[float, int]] = {}
+
+    def audit_throttled(event: str, ip: str, **fields: Any) -> None:
+        """At most one line per event and address per minute, with a count of the
+        rest: requests that need no login must not be able to rotate away the
+        transmit history in the audit log."""
+        now, k = time.monotonic(), f"{event}|{_limit_key(ip)}"
+        last, suppressed = throttle.get(k, (0.0, 0))
+        if now - last < AUDIT_THROTTLE_S:
+            throttle[k] = (last, suppressed + 1)
+            return
+        if len(throttle) > 10_000:
+            throttle.clear()
+        throttle[k] = (now, 0)
+        audit_event(event, ip=ip, suppressed=suppressed, **fields)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -199,11 +236,13 @@ def create_app(
         ip = _client_ip(request)
         if not require_csrf(request, request.cookies.get(LOGIN_CSRF_COOKIE)):
             return JSONResponse({"error": "csrf"}, 403)
-        # Only failed attempts count toward the per-address limit, so members
+        # Each attempt takes a slot before the password check (so a burst cannot
+        # all get in at once); a successful login gives it back, so members
         # signing in from several devices are never throttled.
-        retry = ctx.login_limiter.retry_after(ip)
-        if retry > 0:
-            audit_event("login_rate_limited", ip=ip)
+        key = _limit_key(ip)
+        if not ctx.login_limiter.allow(key):
+            retry = max(1, ctx.login_limiter.retry_after(key))
+            audit_throttled("login_rate_limited", ip)
             return JSONResponse(
                 {"error": "too many attempts"}, 429, headers={"Retry-After": str(retry)}
             )
@@ -213,17 +252,18 @@ def create_app(
             password = str(body.get("password", ""))[:256]
         except Exception:
             return JSONResponse({"error": "bad request"}, 400)
+        loop = asyncio.get_running_loop()
         try:
-            user = await asyncio.to_thread(users.verify_login, username, password)
+            user = await loop.run_in_executor(_login_pool, users.verify_login, username, password)
         except LockedOut as exc:
-            ctx.login_limiter.allow(ip)
             audit_event("login_locked", user=username.lower(), ip=ip)
             return JSONResponse({"error": "locked", "retry_after": exc.seconds_left}, 423)
         except LoginFailed:
-            ctx.login_limiter.allow(ip)
             audit_event("login_failed", user=username.lower(), ip=ip)
             return JSONResponse({"error": "wrong username or password"}, 401)
-        token, sess = await asyncio.to_thread(users.create_session, user, ip)
+        ctx.login_limiter.refund(key)
+        token, sess = await loop.run_in_executor(_login_pool, users.create_session, user, ip)
+        await loop.run_in_executor(_login_pool, users.purge_expired)
         audit_event(
             "login", user=user.username, role=user.role.value, ip=ip, session=sess.public_id
         )
@@ -278,7 +318,7 @@ def create_app(
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
         if not same_origin(websocket.headers.get("origin"), websocket.headers.get("host")):
-            audit_event("ws_rejected", reason="origin", ip=_client_ip(websocket))
+            audit_throttled("ws_rejected", _client_ip(websocket), reason="origin")
             await websocket.close(code=1008)
             return
         sess = await current_session(websocket)

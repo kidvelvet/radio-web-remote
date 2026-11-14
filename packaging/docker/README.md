@@ -22,5 +22,7 @@ docker compose -f packaging/docker/compose.yaml exec radio-web-remote radio-web-
   inside the container.
 - **Network:** `network_mode: host` lets the server see the host's LAN
   addresses, so its certificate covers them.
-- **State** lives in `./data` next to the compose file.
+- **State** lives in `./data` next to the compose file, which is kept out of
+  the image build. The container runs as an ordinary user (uid 1000); make
+  `./data` writable for it (`sudo chown 1000 packaging/docker/data`).
 - Not tested on hardware yet. TODO(verify) on a Raspberry Pi.

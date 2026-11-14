@@ -68,6 +68,11 @@ class AudioRouter:
     async def _keep_running(self) -> None:
         """Start the devices; if a device is missing, keep retrying."""
         while True:
+            backends = [b for b in (self.radio, self.host) if b is not None]
+            if self.running and any(b.stalled() for b in backends):
+                log.warning("audio device stopped delivering; reopening")
+                self.running, self.error = False, "audio device stopped"
+                await self._stop_all()
             if not self.running:
                 try:
                     assert self.radio is not None
@@ -78,7 +83,14 @@ class AudioRouter:
                 except Exception as exc:
                     self.error = str(exc) or type(exc).__name__
                     log.warning("audio not available: %s (retrying in %.0f s)", self.error, RETRY_S)
+                    await self._stop_all()  # never leave half of it open between tries
             await asyncio.sleep(RETRY_S)
+
+    async def _stop_all(self) -> None:
+        for b in (self.radio, self.host):
+            if b is not None:
+                with contextlib.suppress(Exception):
+                    await b.stop()
 
     async def close(self) -> None:
         if self._task is not None:

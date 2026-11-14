@@ -61,8 +61,9 @@ export class Scope {
     this.floorInput.value = load("rwr.scope.floor", 0);
     this.ceilInput.value = load("rwr.scope.ceiling", 100);
     for (const [el, key] of [[this.floorInput, "rwr.scope.floor"], [this.ceilInput, "rwr.scope.ceiling"]]) {
-      el.addEventListener("input", () => { save(key, el.value); this.redrawSpectrum(); });
+      el.addEventListener("input", () => { save(key, el.value); this.readScale(); this.redrawSpectrum(); });
     }
+    this.readScale();
     this.resize();
     window.addEventListener("resize", () => this.resize());
     for (const c of [this.spec, this.fall]) this.wireTap(c);
@@ -81,10 +82,17 @@ export class Scope {
     this.redrawSpectrum();
   }
 
-  // Map a level to 0..1 using the user's floor and ceiling (percent of the radio's scale).
+  // The floor and ceiling (percent of the radio's scale), read once per change,
+  // not once per pixel column.
+  readScale() {
+    this.floorPct = Number(this.floorInput.value) / 100;
+    this.ceilPct = Number(this.ceilInput.value) / 100;
+  }
+
+  // Map a level to 0..1 using the user's floor and ceiling.
   norm(value, max) {
-    const lo = (Number(this.floorInput.value) / 100) * max;
-    const hi = Math.max(lo + 1, (Number(this.ceilInput.value) / 100) * max);
+    const lo = this.floorPct * max;
+    const hi = Math.max(lo + 1, this.ceilPct * max);
     return Math.min(1, Math.max(0, (value - lo) / (hi - lo)));
   }
 
@@ -141,9 +149,16 @@ export class Scope {
     const ctx = this.specCtx;
     if (!ctx) return;
     const w = this.spec.width, h = this.spec.height;
-    const css = getComputedStyle(this.spec);
+    if (!this.colors) {  // read the theme once, not on every scope line
+      const css = getComputedStyle(this.spec), v = (n, d) => css.getPropertyValue(n) || d;
+      this.colors = {
+        grid: v("--scope-grid", "#334"), fill: v("--scope-fill", "rgba(91,155,255,.35)"),
+        line: v("--scope-line", "#5b9bff"), marker: v("--scope-marker", "#ff5252"),
+      };
+    }
+    const colors = this.colors;
     ctx.clearRect(0, 0, w, h);
-    ctx.strokeStyle = css.getPropertyValue("--scope-grid") || "#334";
+    ctx.strokeStyle = colors.grid;
     ctx.lineWidth = 1;
     for (let i = 1; i < 10; i++) {
       const x = Math.round((i * w) / 10) + 0.5;
@@ -158,13 +173,13 @@ export class Scope {
       }
       ctx.lineTo(w, h);
       ctx.closePath();
-      ctx.fillStyle = css.getPropertyValue("--scope-fill") || "rgba(91,155,255,.35)";
+      ctx.fillStyle = colors.fill;
       ctx.fill();
-      ctx.strokeStyle = css.getPropertyValue("--scope-line") || "#5b9bff";
+      ctx.strokeStyle = colors.line;
       ctx.stroke();
       if (this.markerHz != null && this.markerHz >= line.low && this.markerHz <= line.high) {
         const x = Math.round(((this.markerHz - line.low) / (line.high - line.low)) * w) + 0.5;
-        ctx.strokeStyle = css.getPropertyValue("--scope-marker") || "#ff5252";
+        ctx.strokeStyle = colors.marker;
         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
       }
     }

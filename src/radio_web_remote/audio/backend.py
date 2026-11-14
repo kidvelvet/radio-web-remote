@@ -12,12 +12,15 @@ import asyncio
 import contextlib
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
 from radio_web_remote.audio import pcm
 from radio_web_remote.audio.pcm import FRAME_SAMPLES, NET_RATE
+
+STALL_S = 3.0  # no callback for this long: the device went away
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +94,10 @@ class AudioBackend(ABC):
     @abstractmethod
     async def stop(self) -> None: ...
 
+    def stalled(self) -> bool:
+        """True if the device stopped delivering (unplugged, radio off)."""
+        return False
+
     def write_tx(self, frame_pcm: bytes) -> None:
         self.fifo.write(frame_pcm)
 
@@ -117,6 +124,7 @@ class SoundDeviceBackend(AudioBackend):
         self.refs = refs
         self._failed_once = False
         self._streams: list[Any] = []
+        self._last_callback = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
         self.device_rate = NET_RATE
 
@@ -147,8 +155,11 @@ class SoundDeviceBackend(AudioBackend):
             sd._terminate()
             sd._initialize()
         devices = list_devices(sd)
-        self.input_device = resolve(self.refs[0], "input", devices)
-        self.output_device = resolve(self.refs[1], "output", devices)
+        api = None
+        with contextlib.suppress(Exception):
+            api = sd.query_hostapis(sd.default.hostapi)["name"]
+        self.input_device = resolve(self.refs[0], "input", devices, api)
+        self.output_device = resolve(self.refs[1], "output", devices, api)
 
     async def start(self) -> None:
         import sounddevice as sd
@@ -159,6 +170,21 @@ class SoundDeviceBackend(AudioBackend):
             self._failed_once = True
             raise
         self._loop = asyncio.get_running_loop()
+        try:
+            self._open_streams(sd)
+        except Exception:
+            # Close what did open (the input, say, when the output failed), so a
+            # retry does not stack a second set of streams on the first.
+            await self.stop()
+            self._failed_once = True
+            raise
+        self._last_callback = time.monotonic()
+        log.info("%s audio running at %d Hz", self.label, self.device_rate)
+
+    def stalled(self) -> bool:
+        return bool(self._streams) and time.monotonic() - self._last_callback > STALL_S
+
+    def _open_streams(self, sd: Any) -> None:
         self.device_rate = self._pick_rate(sd)
         factor = self.device_rate // NET_RATE  # 1 or 3
         block = FRAME_SAMPLES * factor
@@ -166,6 +192,7 @@ class SoundDeviceBackend(AudioBackend):
         if self.input_device is not None:
 
             def on_input(indata: Any, frames: int, _t: Any, status: Any) -> None:
+                self._last_callback = time.monotonic()
                 if status:
                     log.debug("%s input status: %s", self.label, status)
                 data = bytes(indata)
@@ -190,6 +217,7 @@ class SoundDeviceBackend(AudioBackend):
         if self.output_device is not None:
 
             def on_output(outdata: Any, frames: int, _t: Any, status: Any) -> None:
+                self._last_callback = time.monotonic()
                 need = frames * 2 // factor
                 data = self.fifo.read(need)
                 if factor == 3:
@@ -207,7 +235,6 @@ class SoundDeviceBackend(AudioBackend):
             )
             stream_out.start()
             self._streams.append(stream_out)
-        log.info("%s audio running at %d Hz", self.label, self.device_rate)
 
     async def stop(self) -> None:
         for s in self._streams:

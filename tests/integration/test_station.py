@@ -318,3 +318,38 @@ async def test_default_config_finds_a_radio_at_a_changed_address():
         assert st.state.frequency_hz == b.sim.state.frequency_hz
     finally:
         await st.close()
+
+
+async def test_keyed_holder_cannot_retune_out_of_band(bench):
+    """Review B2: refused before the radio is retuned, not stopped after."""
+    st, sim = bench.station, bench.sim
+    await st.set_frequency(CAROL, 14_200_000)
+    await st.tx.ptt_down(CAROL)
+    try:
+        with pytest.raises(ControlDenied):
+            await st.set_frequency(CAROL, 7_100_000)
+        assert sim.state.frequency_hz == 14_200_000 and sim.state.transmitting
+    finally:
+        await st.tx.ptt_up(CAROL)
+
+
+async def test_an_ng_to_a_slow_item_does_not_drop_the_link(bench):
+    """Review B3: the radio refusing one item (NG) is not a lost link."""
+    st, sim = bench.station, bench.sim
+    original = sim._handle
+
+    def ng_squelch(frame, now):
+        if frame.payload == b"\x14\x03":
+            return bytes([0xFA])
+        return original(frame, now)
+
+    sim._handle = ng_squelch
+    await st.tx.ptt_down(ALICE)
+    try:
+        for _ in range(10):  # many poll ticks, the squelch read among them
+            st.tx.heartbeat(ALICE)
+            await asyncio.sleep(0.1)
+        assert st.connected and st.tx.status.keyed
+        assert not st.state.tx.unkey_unconfirmed
+    finally:
+        await st.tx.ptt_up(ALICE)

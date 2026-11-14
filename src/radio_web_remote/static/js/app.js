@@ -48,7 +48,7 @@ const STOP_TEXT = {
 
 const app = {
   me: null, ws: null, hello: null, state: null, retry: 500,
-  heartbeat: null, ptt: false, dragging: false, activeLevel: null,
+  heartbeat: null, ptt: false, pressed: false, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
   scope: null, scopeOn: false,
   audio: null, audioMode: null, rxStats: null, txLevel: null,
@@ -60,6 +60,12 @@ function fmtHz(hz) {
   const s = String(Math.round(hz)).padStart(7, "0");
   const mhz = s.slice(0, -6), khz = s.slice(-6, -3), h = s.slice(-3);
   return `${mhz}.${khz}.${h}`;
+}
+// Write text only when it changed: render() runs on every state message, and
+// #txtext is an assertive live region that screen readers announce.
+function setText(id, text) {
+  const el = $(id);
+  if (el && el.textContent !== text) el.textContent = text;
 }
 function pct(v) { return v == null ? "" : `${Math.round((v * 100) / 255)}%`; }
 function meterText(m) {
@@ -81,7 +87,7 @@ function connect() {
   ws.binaryType = "arraybuffer";
   app.ws = ws;
   setLink("connecting");
-  ws.onopen = () => { app.retry = 500; setLink("up"); };
+  ws.onopen = () => { app.retry = 500; ws.opened = true; setLink("up"); };
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) {
       const kind = new Uint8Array(ev.data, 0, 1)[0];
@@ -102,6 +108,13 @@ function connect() {
     setLink("down");
     $("ptt").disabled = true;
     if (ev.code === 4001) { location.replace("/login"); return; }
+    if (!ws.opened) {
+      // Refused before it opened (the browser reports 1006): maybe the session
+      // expired. Ask; go to the login page rather than retry forever.
+      fetch("/api/me", { credentials: "same-origin" })
+        .then((r) => { if (r.status === 401) location.replace("/login"); })
+        .catch(() => {});
+    }
     setTimeout(connect, app.retry);
     app.retry = Math.min(app.retry * 2, 5000);
   };
@@ -193,7 +206,8 @@ function render(s) {
   const listener = app.hello && !app.hello.may_transmit && app.hello.user.role === "listener";
   document.querySelectorAll("#scope-controls select, #sc-hold").forEach((el) => { el.disabled = !!listener; });
   renderTx(s, prev);
-  if (!s.connected) $("txtext").textContent = s.error ? `Radio not connected: ${s.error}` : "Radio not connected";
+  // Never hide "TX OFF NOT CONFIRMED": the radio may still be on air.
+  if (!s.connected && !s.tx?.unconfirmed) setText("txtext", s.error ? `Radio not connected: ${s.error}` : "Radio not connected");
 }
 
 function renderTx(s, prev) {
@@ -202,17 +216,21 @@ function renderTx(s, prev) {
   const bar = $("txbar");
   if (tx.unconfirmed) {
     bar.dataset.state = "danger";
-    $("txtext").textContent = "TX OFF NOT CONFIRMED: the radio may still be transmitting. Retrying.";
+    setText("txtext", "TX OFF NOT CONFIRMED: the radio may still be transmitting. Retrying.");
+    setText("txlevel", "");
   } else if (tx.transmitting && mine) {
     bar.dataset.state = tx.keyed ? "tx" : "pending";
-    const lvl = app.txLevel != null && app.txLevel > -120 ? `  audio ${Math.round(app.txLevel)} dBFS` : "";
-    $("txtext").textContent = tx.keyed ? `ON AIR  ${tx.holder}${lvl}` : "Keying...";
+    const lvl = app.txLevel != null && app.txLevel > -120 ? `audio ${Math.round(app.txLevel)} dBFS` : "";
+    setText("txtext", tx.keyed ? `ON AIR  ${tx.holder}` : "Keying...");
+    setText("txlevel", tx.keyed ? lvl : "");
   } else if (tx.transmitting) {
     bar.dataset.state = "held";
-    $("txtext").textContent = `TX held by ${tx.holder}`;
+    setText("txtext", `TX held by ${tx.holder}`);
+    setText("txlevel", "");
   } else {
     bar.dataset.state = "rx";
-    $("txtext").textContent = "Receive";
+    setText("txtext", "Receive");
+    setText("txlevel", "");
   }
   const others = tx.transmitting && !mine && !app.ptt;
   $("ptt").disabled = !app.hello?.may_transmit || !s.connected || others;
@@ -241,13 +259,20 @@ function localPtt(down) {
   app.ptt = down;
   $("ptt").setAttribute("aria-pressed", String(down));
 }
+// app.pressed: the user's press is still in effect, even when the server has
+// ended the transmission (timeout, limits). The server then refuses a new key
+// until it sees this press released, so the release is always sent.
 function setPtt(down) {
-  if (down === app.ptt) return;
   if (down) {
+    if (app.ptt) return;
+    if (app.pressed) send({ type: "ptt", down: false });  // toggle mode after a server stop
     showMsg(app.audioMode === "remote" || app.audioMode === "host"
       ? "" : "No microphone path: start audio with a mic route to transmit voice.");
     requestWakeLock();
+  } else if (!app.ptt && !app.pressed) {
+    return;
   }
+  app.pressed = down;
   localPtt(down);
   send({ type: "ptt", down });
 }
@@ -273,7 +298,10 @@ function wirePtt() {
     $("ptthint").textContent = toggle.checked ? "Tap once to transmit, tap again to stop." : "Hold to talk. Spacebar works on a keyboard.";
   });
 
-  const typing = (el) => el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA");
+  // Text entry keeps Space; sliders, checkboxes and buttons do not.
+  const NOT_TEXT = new Set(["range", "checkbox", "radio", "button", "submit", "reset"]);
+  const typing = (el) => el && ((el.tagName === "INPUT" && !NOT_TEXT.has(el.type))
+    || el.tagName === "SELECT" || el.tagName === "TEXTAREA");
   window.addEventListener("keydown", (ev) => {
     if (ev.code !== "Space" || typing(document.activeElement) || ev.repeat || btn.disabled) return;
     ev.preventDefault();
@@ -316,6 +344,7 @@ function current() { return app.pendingHz ?? app.state?.frequency_hz ?? 0; }
 
 // Jump straight to a frequency (direct entry, band button).
 function jumpTo(hz) {
+  app.stopInertia?.();  // a flick still coasting must not overwrite the jump
   app.pendingHz = hz;
   $("freqtext").textContent = fmtHz(hz);
   send({ type: "set_frequency", hz });
@@ -325,6 +354,7 @@ function jumpTo(hz) {
 function wireTuning() {
   const f = $("freq");
   let startX = 0, startHz = 0, lastX = 0, lastT = 0, velocity = 0, inertia = null;
+  app.stopInertia = () => { cancelAnimationFrame(inertia); inertia = null; };
   f.addEventListener("pointerdown", (ev) => {
     if (!app.state?.frequency_hz) return;
     cancelAnimationFrame(inertia);
@@ -377,7 +407,11 @@ function wireTuning() {
     ev.preventDefault();
     const v = parseFloat($("entry").value.replace(",", "."));
     if (!Number.isFinite(v) || v <= 0) return;
-    jumpTo(Math.round(v < 1000 ? v * 1e6 : v * 1e3));  // MHz, or kHz if 1000 or more
+    // MHz, or kHz if 1000 or more; but a value the radio covers in MHz (1296.1
+    // on an IC-9700) stays MHz.
+    const cov = app.state?.coverage_hz || [];
+    const inMhz = (hz) => cov.some(([lo, hi]) => hz >= lo && hz <= hi);
+    jumpTo(Math.round(v < 1000 || inMhz(v * 1e6) ? v * 1e6 : v * 1e3));
     $("entry").value = "";
     $("entry").blur();
   });
@@ -400,6 +434,10 @@ function wireControls() {
     let timer = null;
     const push = () => { timer = null; send({ type: "set_level", level: name, value: Number(input.value) }); };
     input.addEventListener("pointerdown", () => { app.activeLevel = name; });
+    // A tap that does not move the slider fires no change: let it follow the radio again.
+    for (const ev of ["pointerup", "pointercancel"]) {
+      input.addEventListener(ev, () => { setTimeout(() => { if (app.activeLevel === name) app.activeLevel = null; }, 0); });
+    }
     input.addEventListener("input", () => {
       $(`l-${name}-t`).textContent = pct(Number(input.value));
       if (!timer) timer = setTimeout(push, SEND_EVERY_MS);
@@ -499,8 +537,12 @@ function audioStatus() {
 
 function onMicFrame(samples, peak) {
   const db = peak > 0 ? Math.max(-60, 20 * Math.log10(peak)) : -60;
-  $("au-mic").value = db;
-  $("au-mic-t").textContent = `${Math.round(db)} dB`;
+  const now = performance.now();
+  if (now - (app.micDrawn || 0) >= 100) {  // 50 frames/s; the meter needs ~10
+    app.micDrawn = now;
+    $("au-mic").value = db;
+    $("au-mic-t").textContent = `${Math.round(db)} dB`;
+  }
   // Send microphone audio only while this page holds PTT; the server ignores it otherwise.
   if (app.ptt && app.audioMode === "remote" && app.ws?.readyState === WebSocket.OPEN) {
     app.ws.send(app.audio.txFrame(samples));
@@ -508,6 +550,9 @@ function onMicFrame(samples, peak) {
 }
 
 async function startAudio() {
+  if (app.audioStarting || app.audioMode) return;  // a double tap must not build two pipelines
+  app.audioStarting = true;
+  $("au-resume").disabled = true;
   const mode = $("au-mode").value;
   const btn = $("au-start");
   btn.disabled = true;
@@ -549,6 +594,8 @@ async function startAudio() {
     return;
   } finally {
     btn.disabled = false;
+    app.audioStarting = false;
+    $("au-resume").disabled = false;
   }
   $("au-status").textContent = audioStatus();
 }

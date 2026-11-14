@@ -224,15 +224,15 @@ async def test_radio_error_on_key_is_reported_and_safe(rig):
         await rig.tx.ptt_down(ALICE)
     assert e.value.reason is DenyReason.RADIO_ERROR
     assert not rig.tx.status.transmitting
-    assert rig.tx.unkey_unconfirmed  # it could not confirm RX either
+    assert rig.tx.status.unkey_unconfirmed  # it could not confirm RX either
     assert rig.tx.status.unkey_unconfirmed  # shown to every client
     assert any(a["event"] == "tx_off_unconfirmed" for a in rig.audit)
     rig.sim.silent = False
     for _ in range(100):  # watchdog keeps sending TX off until confirmed
-        if not rig.tx.unkey_unconfirmed:
+        if not rig.tx.status.unkey_unconfirmed:
             break
         await asyncio.sleep(0.05)
-    assert not rig.tx.unkey_unconfirmed and not rig.on_air
+    assert not rig.tx.status.unkey_unconfirmed and not rig.on_air
     assert not rig.tx.status.unkey_unconfirmed
     confirmed = [a for a in rig.audit if a["event"] == "tx_off_confirmed"]
     assert confirmed and confirmed[0]["after_s"] > 0
@@ -350,3 +350,23 @@ async def test_unreadable_tx_frequency_refuses_to_key(rig705):
         await rig705.tx.ptt_down(ALICE)
     assert e.value.reason is DenyReason.RADIO_ERROR
     assert True not in rig705.sim.tx_history
+
+
+async def test_new_holder_is_not_unkeyed_by_the_previous_release(rig):
+    """Review B1: Bob keys in the same tick Alice releases; Alice's TX off must
+    reach the radio before Bob's TX on, not after it."""
+    await rig.tx.ptt_down(ALICE)
+    assert rig.on_air
+    await asyncio.gather(rig.tx.ptt_up(ALICE), rig.tx.ptt_down(BOB))
+    assert rig.tx.status.holder_callsign == BOB.callsign and rig.tx.status.keyed
+    assert rig.on_air  # Bob is really on the air
+    await rig.tx.ptt_up(BOB)
+    assert not rig.on_air
+
+
+async def test_no_key_after_close(rig):
+    """Review B11: once closed (no watchdog), keying is refused."""
+    await rig.tx.close()
+    with pytest.raises(TxDenied):
+        await rig.tx.ptt_down(ALICE)
+    assert not rig.on_air

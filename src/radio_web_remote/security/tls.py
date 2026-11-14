@@ -122,13 +122,26 @@ def wanted_sans(cfg: Config, addresses: set[IPAddr] | None = None) -> SanSet:
     return SanSet(frozenset(d for d in dns if d), frozenset(ips))
 
 
-def _write_private(path: Path, data: bytes) -> None:
+def _write_private(path: Path, data: bytes) -> Path:
+    """Write to a temporary file beside `path` (mode 0600); the caller renames it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as fh:
         fh.write(data)
     with contextlib.suppress(OSError):
-        os.chmod(path, 0o600)
+        os.chmod(tmp, 0o600)
+    return tmp
+
+
+def _write_pair(key_path: Path, key_pem: bytes, cert_path: Path, cert_pem: bytes) -> None:
+    """Key and certificate both written before either replaces the old one, so a
+    crash cannot leave a key that does not match its certificate."""
+    key_tmp = _write_private(key_path, key_pem)
+    cert_tmp = cert_path.with_name(cert_path.name + ".tmp")
+    cert_tmp.write_bytes(cert_pem)
+    os.replace(key_tmp, key_path)
+    os.replace(cert_tmp, cert_path)
 
 
 def _key_pem(key: rsa.RSAPrivateKey) -> bytes:
@@ -211,9 +224,8 @@ def create_ca(directory: Path, club_name: str, sans: SanSet | None = None) -> tu
         .sign(key, hashes.SHA256())
     )
     cert_path, key_path = directory / "ca.crt", directory / "ca.key"
-    _write_private(key_path, _key_pem(key))
     cert_path.parent.mkdir(parents=True, exist_ok=True)
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    _write_pair(key_path, _key_pem(key), cert_path, cert.public_bytes(serialization.Encoding.PEM))
     return cert_path, key_path
 
 
@@ -258,8 +270,7 @@ def create_server_cert(directory: Path, sans: SanSet, days: int) -> tuple[Path, 
         .sign(ca_key, hashes.SHA256())
     )
     cert_path, key_path = directory / "server.crt", directory / "server.key"
-    _write_private(key_path, _key_pem(key))
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    _write_pair(key_path, _key_pem(key), cert_path, cert.public_bytes(serialization.Encoding.PEM))
     return cert_path, key_path
 
 

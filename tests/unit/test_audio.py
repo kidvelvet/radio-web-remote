@@ -85,3 +85,51 @@ def test_resolve_errors():
         resolve("auto", "input", two)
     with pytest.raises(AudioDeviceError, match="no input device"):
         resolve("zzz", "input", DEVICES)
+
+
+def test_resolve_auto_with_linux_and_windows_names():
+    """Review B6: PortAudio decorates the codec's name off macOS, and Windows
+    lists every device once per host API."""
+    alsa = [
+        AudioDevice(0, "bcm2835 Headphones: - (hw:0,0)", 0, 8, "ALSA"),
+        AudioDevice(2, "USB Audio CODEC: USB Audio (hw:2,0)", 2, 2, "ALSA"),
+    ]
+    assert resolve("auto", "input", alsa) == 2 and resolve("auto", "output", alsa) == 2
+    win = [
+        AudioDevice(1, "Microphone (USB Audio CODEC)", 2, 0, "MME"),
+        AudioDevice(7, "Microphone (USB Audio CODEC)", 2, 0, "Windows DirectSound"),
+        AudioDevice(12, "Microphone (USB Audio CODEC)", 2, 0, "Windows WASAPI"),
+    ]
+    assert resolve("auto", "input", win, preferred_api="MME") == 1
+    with pytest.raises(AudioDeviceError, match="3 input devices"):
+        resolve("auto", "input", win)  # without a default API it stays ambiguous
+
+
+async def test_router_closes_a_half_started_backend_before_retrying(monkeypatch):
+    """Review B4: a failed start must not leave streams open for the next try to stack on."""
+    import asyncio
+
+    from radio_web_remote.audio import router as router_mod
+    from radio_web_remote.audio.backend import AudioBackend
+
+    class Fake(AudioBackend):
+        def __init__(self, fail):
+            super().__init__()
+            self.fail, self.open, self.starts = fail, 0, 0
+
+        async def start(self):
+            self.starts += 1
+            self.open += 1
+            if self.fail:
+                raise OSError("no device")
+
+        async def stop(self):
+            self.open = 0
+
+    monkeypatch.setattr(router_mod, "RETRY_S", 0.01)
+    radio, host = Fake(False), Fake(True)
+    r = router_mod.AudioRouter(radio, host, holder=lambda: None)
+    await r.start()
+    await asyncio.sleep(0.1)
+    assert radio.starts > 2 and radio.open <= 1 and not r.running
+    await r.close()

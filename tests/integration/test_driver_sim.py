@@ -281,3 +281,36 @@ async def test_scope_output_lines_and_settings(rig):
     assert not sim.state.scope_output
     assert driver.scope.stats.dropped == 0
     _ = StateEvent
+
+
+# -- review round 1 (docs/review-changelog.md) ---------------------------------
+
+
+async def test_unkey_survives_an_ng_to_tx_off(rig):
+    """Review A1: an FA (for example a late one) answering TX off must not skip
+    the read-back and resend; the radio still ends up in RX."""
+    driver, sim, _ = rig
+    original = sim._handle
+    first = {"ng": True}
+
+    def ng_once(frame, now):
+        if first["ng"] and frame.payload == b"\x1c\x00\x00":
+            first["ng"] = False
+            return bytes([0xFA])
+        return original(frame, now)
+
+    sim._handle = ng_once
+    await driver.key()
+    assert sim.state.transmitting
+    assert await driver.unkey() is True
+    assert not sim.state.transmitting and not first["ng"]
+
+
+async def test_link_errors_are_radio_errors(rig):
+    """Review A4: a closed transport surfaces as RadioError, which every caller handles."""
+    from radio_web_remote.radios.base import RadioError
+
+    driver, _, _ = rig
+    await driver.transport.close()
+    with pytest.raises(RadioError):
+        await driver.get_frequency()

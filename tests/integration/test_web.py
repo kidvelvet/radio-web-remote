@@ -672,3 +672,21 @@ def test_audio_diag_rejects_bad_fields(env, bad):
         with patch("radio_web_remote.web.hub._now", return_value=1e9):
             ws.send_json({"type": "audio_diag", **DIAG, **bad})
             assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        {"type": "set_scope", "setting": "edge", "value": 2.0},  # float passed `in (1, 2, 3, 4)`
+        {"type": "set_scope", "setting": "span", "value": True},
+        {"type": "set_mode", "mode": "USB", "filter": True},  # bool passed `in (1, 2, 3)`
+    ],
+)
+def test_ws_rejects_float_and_bool_where_int_is_needed(env, msg):
+    """Review C7: these used to drop the connection or broadcast a bogus filter."""
+    c = env["client"]
+    login(c)
+    with wsc(c, "/ws") as ws:
+        ws.receive_json()
+        ws.send_json(msg)
+        assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"

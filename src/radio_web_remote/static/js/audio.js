@@ -53,6 +53,7 @@ export class BrowserAudio {
             : `Microphone not available: ${e && e.message ? e.message : e}`);
       }
     }
+    this.mic = stream;  // now, so stop() can release it if anything below fails
     const ctx = new AudioContext({ latencyHint: "interactive" });
     this.ctx = ctx;
     await ctx.resume();
@@ -71,7 +72,6 @@ export class BrowserAudio {
     // tools/bench_audio.py measures round-trip latency at this point.
     if (new URLSearchParams(location.search).has("bench")) window.rwrBench = { ctx, out: this.gain };
     if (stream) {
-      this.mic = stream;
       const src = new MediaStreamAudioSourceNode(ctx, { mediaStream: stream });
       this.capture = new AudioWorkletNode(ctx, "mic-capture", { numberOfOutputs: 1 });
       this.capture.port.onmessage = (ev) => this.onMicFrame?.(ev.data.pcm, ev.data.peak);
@@ -100,8 +100,8 @@ export class BrowserAudio {
     const count = v.getUint16(10, true);
     if (v.getUint16(8, true) !== NET_RATE || buf.byteLength !== HEADER + 2 * count) return;
     this.noteArrival(v.getUint32(4, true));
-    const samples = new Int16Array(buf.slice(HEADER));
-    this.player.port.postMessage(samples, [samples.buffer]);
+    const samples = new Int16Array(buf, HEADER, count);  // a view: no copy
+    this.player.port.postMessage(samples, [buf]);
   }
 
   // Receive diagnostics: frame arrival gaps (network), sequence gaps (frames
@@ -126,12 +126,12 @@ export class BrowserAudio {
 
   startDiag() {
     this.diag = { frames: 0, lost: 0, late: 0, maxGap: 0, maxLag: 0, lastSeq: null, lastArr: null };
-    let expect = performance.now() + 20;
+    let expect = performance.now() + 50;
     this.lagTimer = setInterval(() => {
       const now = performance.now();
       if (this.diag) this.diag.maxLag = Math.max(this.diag.maxLag, now - expect);
-      expect = now + 20;
-    }, 20);
+      expect = now + 50;
+    }, 50);
   }
 
   takeDiag() {

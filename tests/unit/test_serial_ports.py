@@ -56,3 +56,22 @@ def test_two_port_radio_prefers_the_port_named_ci_v():
 def test_two_port_radio_explicit_port_among_matches():
     m = SerialMatch(usb_serial="IC-705 00000001", port="/dev/cu.usbmodem1124203")
     assert resolve_port(m, IC705_MAC) == "/dev/cu.usbmodem1124203"
+
+
+def test_empty_match_uses_the_one_connected_radio_of_the_model():
+    from radio_web_remote.devices.serial_ports import model_for_driver
+
+    nine_a = PortInfo(
+        "/dev/cu.usbserial-20", "CP2102N", "IC-9700 33333333 A", "0-1.3", 0x10C4, 0xEA60
+    )
+    nine_b = PortInfo(
+        "/dev/cu.usbserial-10", "CP2102N", "IC-9700 33333333 B", "0-1.4", 0x10C4, 0xEA60
+    )
+    empty = SerialMatch()
+    assert resolve_port(empty, [nine_b, nine_a], model_for_driver("icom.ic9700")) == nine_a.device
+    assert resolve_port(empty, IC705_MAC, "IC-705") == "/dev/cu.usbmodem1124201"
+    with pytest.raises(PortNotFound, match="no IC-7300 found"):
+        resolve_port(empty, IC705_MAC, "IC-7300")
+    two = [*PORTS, PortInfo("/dev/cu.x", "CP2102", "IC-7300 99999999", "0-2", 0x10C4, 0xEA60)]
+    with pytest.raises(PortNotFound, match="2 IC-7300 radios"):
+        resolve_port(empty, two, "IC-7300")

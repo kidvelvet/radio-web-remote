@@ -62,7 +62,8 @@ UNKEY_BUS_WAIT_S = 0.05
 UNKEY_CONFIRM_S = 0.5  # give up and raise after this long
 UNKEY_POLL_S = 0.02  # between TX-state reads
 UNKEY_RESEND_S = 0.15  # resend TX off if still TX after this long since the last send
-COMMAND_RETRIES = 1  # resend once on timeout; every command we send is idempotent
+COMMAND_RETRIES = 1  # resend once on timeout (not for 07 B0 swap, which is not idempotent)
+LATE_REPLY_DRAIN_S = 0.05  # after a timeout, swallow a late FB/FA before the next command
 
 
 class _Pending:
@@ -200,7 +201,10 @@ class IcomCivDriver(RadioDriver):
             self.address,
             self.address,
         )
-        await self.unkey(verify=True)
+        try:
+            await self.unkey(verify=True)
+        except RadioTimeout as exc:
+            log.warning("TX off at the found address not confirmed: %s", exc)
         return True
 
     def _on_frame(self, frame: Frame) -> None:
@@ -251,10 +255,18 @@ class IcomCivDriver(RadioDriver):
         fut: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
         self._pending = _Pending(command.prefix if expect_reply else None, fut)
         try:
-            await self.transport.send_urgent(self._frame(payload))
+            try:
+                await self.transport.send_urgent(self._frame(payload))
+            except OSError as exc:  # serial error or closed transport (ConnectionError)
+                raise RadioError(f"{self.model.name} link error: {exc}") from exc
             try:
                 reply = await asyncio.wait_for(fut, self.timeout)
             except TimeoutError:
+                # Replies carry no command id: an FB/FA arriving late would be
+                # taken as the answer to the next command. Let it land as an
+                # unsolicited frame (ignored) before giving up the bus.
+                self._pending = None
+                await asyncio.sleep(LATE_REPLY_DRAIN_S)
                 raise RadioTimeout(
                     f"{self.model.name} did not answer {command.name} within {self.timeout}s"
                 ) from None
@@ -270,14 +282,15 @@ class IcomCivDriver(RadioDriver):
         payload: bytes,
         expect_reply: bool,
         priority: Priority = Priority.CONTROL,
+        retries: int = COMMAND_RETRIES,
     ) -> Frame:
         self._require(command)
-        for attempt in range(COMMAND_RETRIES + 1):
+        for attempt in range(retries + 1):
             async with self._bus.acquire(priority):
                 try:
                     return await self._exchange(command, payload, expect_reply)
                 except RadioTimeout:
-                    if attempt == COMMAND_RETRIES:
+                    if attempt == retries:
                         raise
                     log.debug("%s timed out, retrying", command.name)
         raise AssertionError("unreachable")
@@ -465,7 +478,11 @@ class IcomCivDriver(RadioDriver):
 
     async def swap_bands(self) -> None:
         self._require(CivCommand.BAND_EXCHANGE)
-        await self._transact(CivCommand.BAND_EXCHANGE, CivCommand.BAND_EXCHANGE.prefix, False)
+        # Not retried: if the first swap was done but its FB was lost, a second
+        # would swap back and report success.
+        await self._transact(
+            CivCommand.BAND_EXCHANGE, CivCommand.BAND_EXCHANGE.prefix, False, retries=0
+        )
 
     async def get_dualwatch(self) -> bool:
         return await self._read_flag(CivCommand.DUALWATCH) == 1
@@ -479,9 +496,9 @@ class IcomCivDriver(RadioDriver):
         return await self._read_flag(CivCommand.SATELLITE) == 1
 
     # -- PTT -------------------------------------------------------------
-    async def get_ptt(self) -> bool:
+    async def get_ptt(self, retries: int = COMMAND_RETRIES) -> bool:
         reply = await self._transact(
-            CivCommand.TX_STATE, cmd.read_tx_state(), True, priority=Priority.URGENT
+            CivCommand.TX_STATE, cmd.read_tx_state(), True, Priority.URGENT, retries
         )
         return cmd.parse_tx_state(reply.payload)
 
@@ -498,7 +515,7 @@ class IcomCivDriver(RadioDriver):
             await self._exchange(CivCommand.TX_STATE, cmd.set_tx_state(True), False)
         return True
 
-    async def unkey(self, verify: bool = True) -> None:
+    async def unkey(self, verify: bool = True) -> bool:
         """Send TX off first in line; with verify, read back until the radio reports RX."""
         self._require(CivCommand.TX_STATE)
         self._ptt_generation += 1
@@ -506,26 +523,31 @@ class IcomCivDriver(RadioDriver):
         payload = cmd.set_tx_state(False)
         try:
             async with self._bus.acquire(Priority.URGENT, wait_s=UNKEY_BUS_WAIT_S):
-                # A missing FB is handled by the read-back below.
-                with contextlib.suppress(RadioTimeout):
+                # A missing FB, an FA (possibly a late one for an earlier command)
+                # or a link error: the read-back below decides, and resends.
+                with contextlib.suppress(RadioError):
                     await self._exchange(CivCommand.TX_STATE, payload, False)
         except TimeoutError:
-            # The command in flight is stuck. Do not wait for it: send TX off now.
+            # The command in flight is stuck. Do not wait for it: send TX off now,
+            # and do not let its FB complete the stuck command as if acknowledged.
             log.warning("bus busy for %.0f ms; sending TX off anyway", UNKEY_BUS_WAIT_S * 1000)
-            await self.transport.send_urgent(self._frame(payload))
+            self._pending = None
+            with contextlib.suppress(OSError):
+                await self.transport.send_urgent(self._frame(payload))
         if not verify:
-            return
+            return True
         loop = asyncio.get_running_loop()
         start = last_send = loop.time()
         while loop.time() - start < UNKEY_CONFIRM_S:
             if self._ptt_generation != generation:
-                return  # a newer key or unkey owns the PTT state now
-            with contextlib.suppress(RadioTimeout):
-                if not await self.get_ptt():
-                    return
+                return False  # a newer key or unkey owns the PTT state now
+            # One attempt per read: the loop's own timing bounds the confirmation.
+            with contextlib.suppress(RadioError, ReplyError):
+                if not await self.get_ptt(retries=0):
+                    return True
             if loop.time() - last_send >= UNKEY_RESEND_S:
                 async with self._bus.acquire(Priority.URGENT):
-                    with contextlib.suppress(RadioTimeout):
+                    with contextlib.suppress(RadioError):
                         await self._exchange(CivCommand.TX_STATE, payload, False)
                 last_send = loop.time()
             await asyncio.sleep(UNKEY_POLL_S)

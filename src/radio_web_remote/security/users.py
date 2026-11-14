@@ -20,6 +20,7 @@ import hashlib
 import re
 import secrets
 import sqlite3
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -121,6 +122,8 @@ def _format_bands(bands: tuple[tuple[int, int], ...] | None) -> str | None:
 
 class UserStore:
     def __init__(self, path: Path, hasher: PasswordHasher | None = None) -> None:
+        self._ghosts: dict[str, tuple[int, float]] = {}  # unknown names: failures, lock
+        self._ghost_lock = threading.Lock()
         self.path = path
         self.ph = hasher or PasswordHasher()
         self._dummy_hash = self.ph.hash(secrets.token_urlsafe(16))
@@ -255,29 +258,56 @@ class UserStore:
             db.execute(sql, (*cols.values(), username.lower()))
 
     # -- login -----------------------------------------------------------
+    def _ghost_locked_until(self, username: str, now: float) -> float:
+        entry = self._ghosts.get(username)
+        return entry[1] if entry and entry[1] > now else 0.0
+
+    def _ghost_failed(self, username: str, now: float) -> bool:
+        """Count a failure for a name with no account; True when it locks now."""
+        with self._ghost_lock:
+            if len(self._ghosts) > 10_000:  # bound memory under a flood of names
+                self._ghosts = {k: v for k, v in self._ghosts.items() if v[1] > now}
+            failed, _ = self._ghosts.get(username, (0, 0.0))
+            failed += 1
+            if failed >= LOCK_AFTER:
+                self._ghosts[username] = (0, now + LOCK_MINUTES * 60)
+                return True
+            self._ghosts[username] = (failed, 0.0)
+            return False
+
     def verify_login(self, username: str, password: str) -> User:
         username = username.strip().lower()
         with self._db() as db:
             r = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        now = time.time()
         if r is None:
-            # Same work as a real check, so timing does not reveal valid names.
+            # Unknown names: same work and the same lockout as a real account,
+            # so neither timing nor a 'locked' answer reveals which names exist.
+            locked_until = self._ghost_locked_until(username, now)
+            if locked_until > now:
+                raise LockedOut(int(locked_until - now) + 1)
             with contextlib.suppress(VerificationError):
                 self.ph.verify(self._dummy_hash, password)
+            if self._ghost_failed(username, now):
+                raise LockedOut(LOCK_MINUTES * 60)
             raise LoginFailed
-        now = time.time()
         if r["locked_until"] > now:
             raise LockedOut(int(r["locked_until"] - now) + 1)
         try:
             self.ph.verify(r["pw_hash"], password)
         except (VerifyMismatchError, VerificationError, InvalidHashError):
-            failed = r["failed"] + 1
-            locked = now + LOCK_MINUTES * 60 if failed >= LOCK_AFTER else 0
+            # Atomic: concurrent wrong guesses must not each see the old count.
             with self._db() as db:
-                db.execute(
-                    "UPDATE users SET failed = ?, locked_until = ? WHERE id = ?",
-                    (0 if locked else failed, locked, r["id"]),
-                )
-            if locked:
+                failed = db.execute(
+                    "UPDATE users SET failed = failed + 1 WHERE id = ? RETURNING failed",
+                    (r["id"],),
+                ).fetchone()[0]
+                if failed >= LOCK_AFTER:
+                    db.execute(
+                        "UPDATE users SET failed = 0, locked_until = ? WHERE id = ?",
+                        (now + LOCK_MINUTES * 60, r["id"]),
+                    )
+            if failed >= LOCK_AFTER:
                 raise LockedOut(LOCK_MINUTES * 60) from None
             raise LoginFailed from None
         if r["disabled"]:

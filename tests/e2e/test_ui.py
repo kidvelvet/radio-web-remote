@@ -346,9 +346,9 @@ def test_microphone_to_radio_while_keyed(page: Page, server, browser_name):
     page.locator("#ptt").hover()
     page.mouse.down()
     # The server reports the level of microphone audio it actually received.
-    expect(page.locator("#txtext")).to_have_text(
-        re.compile(r"ON AIR\s+N0OP\s+audio -?\d+ dBFS"), timeout=8_000
-    )
+    expect(page.locator("#txtext")).to_have_text(re.compile(r"ON AIR\s+N0OP"), timeout=8_000)
+    # The level is beside the status, outside the announced live region.
+    expect(page.locator("#txlevel")).to_have_text(re.compile(r"audio -?\d+ dBFS"), timeout=8_000)
     page.mouse.up()
     expect(page.locator("#txtext")).to_have_text("Receive", timeout=5_000)
     page.click("#au-start")

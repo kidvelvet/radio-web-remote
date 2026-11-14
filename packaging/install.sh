@@ -27,6 +27,13 @@ PY="${PYTHON:-python3}"
 OS="$(uname -s)"
 
 say() { printf '%s\n' "$*"; }
+EXE_PATTERN="$PREFIX/venv/bin/radio-web-remote serve"
+server_running() { pgrep -f "$EXE_PATTERN" >/dev/null 2>&1; }
+# Services start in the data folder: a stray ./config.yaml elsewhere must not win.
+case "$(uname -s)" in
+    Darwin) DATA="$HOME/Library/Application Support/radio-web-remote" ;;
+    *) DATA="${XDG_DATA_HOME:-$HOME/.local/share}/radio-web-remote" ;;
+esac
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
 service_files() {
@@ -51,6 +58,16 @@ remove_service() {
     say "Removed the service ($f)."
 }
 
+stop_server() {  # before deleting the program it runs from
+    case "$OS" in
+        Linux) systemctl --user stop radio-web-remote.service 2>/dev/null || true ;;
+    esac
+    if server_running; then
+        pkill -f "$EXE_PATTERN" || true
+        say "Stopped the running server."
+    fi
+}
+
 install_service() {
     exe="$PREFIX/venv/bin/radio-web-remote"
     f="$(service_files)"
@@ -58,10 +75,11 @@ install_service() {
     mkdir -p "$(dirname "$f")"
     case "$OS" in
         Linux)
-            sed "s|@EXE@|$exe|g" "$HERE/systemd/radio-web-remote.service" > "$f" 2>/dev/null \
-                || write_systemd_unit "$exe" > "$f"
+            mkdir -p "$DATA"
+            write_systemd_unit "$exe" > "$f"
             systemctl --user daemon-reload
-            systemctl --user enable --now radio-web-remote.service
+            systemctl --user enable radio-web-remote.service
+            systemctl --user restart radio-web-remote.service  # starts it, or picks up an upgrade
             say "Service: systemctl --user status radio-web-remote"
             say "To keep it running when you are logged out:  sudo loginctl enable-linger $USER" ;;
         Darwin)
@@ -71,8 +89,13 @@ install_service() {
             # permission, so the server runs in a Terminal window started at login.
             write_command "$exe" > "$f"
             chmod +x "$f"
-            open "$f"
-            say "Started the server in a Terminal window ($f)."
+            if server_running; then
+                say "The server is already running. Close its Terminal window to stop it;"
+                say "it starts again with the new version when you open $f."
+            else
+                open "$f"
+                say "Started the server in a Terminal window ($f)."
+            fi
             say "If Terminal asks for Microphone access, allow it (needed even to listen)."
             say "To start it at login: System Settings > General > Login Items >"
             say "Open at Login > + and choose $f" ;;
@@ -85,9 +108,13 @@ write_systemd_unit() {
 [Unit]
 Description=radio-web-remote (browser remote for amateur radio transceivers)
 After=network-online.target sound.target
+# A crash loop (no init yet, a config error) stops after 10 tries in 5 minutes.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 ExecStart=$1 serve
+WorkingDirectory=$DATA
 Restart=always
 RestartSec=3
 
@@ -102,6 +129,7 @@ write_command() {
 # radio-web-remote in a Terminal window (macOS). Restarts the server if it
 # stops: a key sent over CI-V survives the server dying, and the server
 # sends TX off first thing when it starts. Close this window to stop it.
+mkdir -p "$DATA" && cd "$DATA" || exit 1
 while true; do
     "$1" serve
     echo "radio-web-remote stopped (exit \$?); restarting in 3 s. Close this window to stop."
@@ -116,6 +144,7 @@ for arg in "$@"; do
     case "$arg" in
         --service) WANT_SERVICE=1 ;;
         --uninstall)
+            stop_server
             remove_service
             rm -rf "$PREFIX" "$BIN/radio-web-remote"
             say "Removed $PREFIX and $BIN/radio-web-remote. Your settings were kept."
@@ -131,13 +160,17 @@ case "$OS" in Linux|Darwin) ;; *) die "this script is for Linux and macOS; on Wi
 "$PY" -c 'import venv, ensurepip' 2>/dev/null \
     || die "Python's venv module is missing. On Debian or Raspberry Pi OS: sudo apt install python3-venv"
 
-if [ "$OS" = Linux ] && ! { ldconfig -p 2>/dev/null | grep -q libportaudio; }; then
+if [ "$OS" = Linux ] && ! "$PY" -c 'import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library("portaudio") else 1)' 2>/dev/null; then
     say "Note: the PortAudio library was not found. Audio needs it:"
     say "  Debian, Ubuntu, Raspberry Pi OS:  sudo apt install libportaudio2"
 fi
 
 say "Installing radio-web-remote into $PREFIX"
-[ -x "$PREFIX/venv/bin/python" ] || "$PY" -m venv "$PREFIX/venv"
+# A venv made while python3-venv was missing has no pip: make it again.
+if ! "$PREFIX/venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    rm -rf "$PREFIX/venv"
+    "$PY" -m venv "$PREFIX/venv" || die "could not create $PREFIX/venv"
+fi
 "$PREFIX/venv/bin/python" -m pip install --quiet --upgrade pip
 "$PREFIX/venv/bin/python" -m pip install --quiet --upgrade "$SOURCE"
 mkdir -p "$BIN"
@@ -155,7 +188,14 @@ if [ "$OS" = Linux ]; then
     done
 fi
 
-[ "$WANT_SERVICE" = 1 ] && install_service
+if [ "$WANT_SERVICE" = 1 ]; then
+    install_service
+elif [ "$OS" = Linux ] && systemctl --user is-active --quiet radio-web-remote.service 2>/dev/null; then
+    systemctl --user restart radio-web-remote.service
+    say "Restarted the running service with the new version."
+elif server_running; then
+    say "The server is running the old version until you restart it."
+fi
 
 say ""
 say "Next:"

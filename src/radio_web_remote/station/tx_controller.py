@@ -128,7 +128,7 @@ class PttDriver(Protocol):
 
     async def key(self) -> bool: ...
 
-    async def unkey(self, verify: bool = True) -> None: ...
+    async def unkey(self, verify: bool = True) -> bool: ...
 
 
 AuditSink = Callable[[dict[str, Any]], None]
@@ -173,6 +173,7 @@ class TxController:
         self._unconfirmed_since = 0.0
         self._unkey_tasks: set[asyncio.Task[None]] = set()
         self._last_unkey_try = 0.0
+        self._closed = False
         self._must_release: set[str] = set()
         self._last_stop: StopReason | None = None
         self._listeners: list[StatusListener] = []
@@ -184,6 +185,7 @@ class TxController:
             self._watchdog = asyncio.create_task(self._watch(), name=f"tx-watchdog-{self.radio_id}")
 
     async def close(self) -> None:
+        self._closed = True  # no new keys: the watchdog is about to stop
         await self._stop(StopReason.SHUTDOWN, force=True)
         if self._watchdog is not None:
             self._watchdog.cancel()
@@ -209,10 +211,6 @@ class TxController:
             self._unkey_failures > 0,
         )
 
-    @property
-    def unkey_unconfirmed(self) -> bool:
-        return self._unkey_pending
-
     def add_listener(self, listener: StatusListener) -> None:
         self._listeners.append(listener)
 
@@ -237,7 +235,13 @@ class TxController:
             raise TxDenied(
                 DenyReason.RELEASE_FIRST, "TX timed out; release PTT before keying again"
             )
+        if self._closed:
+            raise TxDenied(DenyReason.RADIO_ERROR, "the station is shutting down")
         async with self._key_lock:
+            # A TX off still on its way must reach the radio before this key:
+            # otherwise it lands after TX on and unkeys the new holder.
+            if self._unkey_tasks:
+                await asyncio.gather(*list(self._unkey_tasks), return_exceptions=True)
             holder = self._holder
             if holder is not None:
                 if holder.session_id == op.session_id:
@@ -247,9 +251,11 @@ class TxController:
             try:
                 hz = await self._read_tx_hz()
             except RadioError as exc:
-                raise TxDenied(
-                    DenyReason.RADIO_ERROR, f"could not read the transmit frequency: {exc}"
-                ) from exc
+                if op.limits.bands_hz is not None:  # the limit check needs it
+                    raise TxDenied(
+                        DenyReason.RADIO_ERROR, f"could not read the transmit frequency: {exc}"
+                    ) from exc
+                hz = self._frequency()  # no band limits: the displayed one is fine for the log
             if not op.limits.allows_frequency(hz):
                 raise TxDenied(DenyReason.OUT_OF_LIMITS, f"{hz} Hz is outside this user's bands")
             if not op.limits.allows_power(self._power()):
@@ -271,8 +277,13 @@ class TxController:
                 if self._generation == generation:
                     await self._stop(StopReason.RADIO_ERROR, force=True)
                 raise TxDenied(DenyReason.RADIO_ERROR, str(exc)) from exc
-            if not keyed or self._generation != generation:
+            if self._generation != generation:
                 return  # an unkey overtook this request; it already cleaned up
+            if not keyed:
+                # The driver saw a newer unkey from outside this controller
+                # (e.g. a reconnect). Do not leave a holder that is not on air.
+                await self._stop(StopReason.RADIO_ERROR, force=True)
+                raise TxDenied(DenyReason.RADIO_ERROR, "TX off overtook the key; press again")
             self._keyed = True
             self._notify()
             self._emit_audit("tx_start", op, frequency_hz=hz)
@@ -321,8 +332,8 @@ class TxController:
     async def recheck_frequency(self) -> None:
         """While keyed: read the transmit frequency again and stop if it left the limits."""
         holder = self._holder
-        if holder is None:
-            return
+        if holder is None or holder.limits.bands_hz is None:
+            return  # nothing to check against
         try:
             hz = await self._read_tx_hz()
         except RadioError as exc:
@@ -373,7 +384,7 @@ class TxController:
     async def _unkey(self) -> None:
         self._last_unkey_try = self._clock()
         try:
-            await self.driver.unkey()
+            confirmed = await self.driver.unkey()
         except Exception as exc:  # RadioError, or anything unexpected: keep retrying
             if self._unkey_failures == 0:
                 log.critical("TX off NOT confirmed on %s: %s. Retrying.", self.radio_id, exc)
@@ -386,8 +397,14 @@ class TxController:
         else:
             if self._unkey_failures:
                 after = round(self._clock() - self._unconfirmed_since, 3)
-                log.warning("TX off confirmed on %s after %.1f s", self.radio_id, after)
-                self._emit_radio_audit("tx_off_confirmed", after_s=after)
+                if confirmed is False:  # a newer key took over before RX was seen
+                    log.warning(
+                        "TX off on %s superseded by a new key after %.1f s", self.radio_id, after
+                    )
+                    self._emit_radio_audit("tx_off_superseded", after_s=after)
+                else:
+                    log.warning("TX off confirmed on %s after %.1f s", self.radio_id, after)
+                    self._emit_radio_audit("tx_off_confirmed", after_s=after)
                 self._unkey_failures = 0
                 self._unkey_pending = False
                 self._notify()

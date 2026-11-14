@@ -35,9 +35,16 @@ class RateLimiter:
             return False
         q.append(now)
         if len(self._events) > 10_000:  # bound memory under a flood of addresses
-            for k in [k for k, v in self._events.items() if not v][:5000]:
-                del self._events[k]
+            for k in list(self._events):
+                if not self._trim(k, now):
+                    del self._events[k]
         return True
+
+    def refund(self, key: str) -> None:
+        """Give back the most recent attempt (a successful login does not count)."""
+        q = self._events.get(key)
+        if q:
+            q.pop()
 
     def retry_after(self, key: str) -> int:
         q = self._trim(key, self._clock())

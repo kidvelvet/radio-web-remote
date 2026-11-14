@@ -10,3 +10,9 @@ tools
 docs
 *.pem
 *.key
+# Never bake state into an image: the compose example keeps it in packaging/docker/data
+packaging/docker/data
+**/users.db
+**/config.yaml
+**/tls
+**/logs
