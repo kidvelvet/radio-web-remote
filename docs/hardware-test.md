@@ -96,7 +96,20 @@ Server: macOS, IC-7300 (firmware 1.42) on USB, LAN-bound on Wi-Fi, CA from `init
 | IOS-4 | Home-screen web app | Add to Home Screen, launch, sign in, Start audio, PTT, background while keyed | 2026-11-13, iPhone: **Pass.** Opens standalone; receive audio and mic work; a 4.5 s transmission ended `released`; backgrounding while keyed dropped PTT. Audio must be started with a tap after each launch (iOS requires a user gesture). |
 | IOS-5 | Receive audio over Wi-Fi | listen for several minutes, note gaps | 2026-11-13, iPad: **Pass, with a Wi-Fi caveat.** The operator heard skipping, then traced it to one spot in the room (interference). Pings from the server to the iPad while streaming: median 6 ms, p90 197 ms, maximum 418 ms. The receive buffer was made adaptive because of this (ADR 0002): fewer gaps, but in the bad spot they still came in clusters. The server now logs late, lost and dropped audio per client. |
 
+### Pre-publication pass (2026-11-14)
+
+Server: macOS, `serve --simulate` with three simulated radios (IC-7300, IC-705, IC-9700), LAN-bound on Wi-Fi, the same CA as above. No radio was connected, so this checks the pages, controls and PTT handling, not the radios or their audio. Operator: maintainer on an iPhone (Safari and the home-screen app), an iPad and a MacBook Pro. Audit for the pass: 33 transmissions on all three radios, 32 ended `released`, 1 `connection_closed` (SIM-5).
+
+| # | Test | Steps | Result |
+|---|------|-------|--------|
+| SIM-1 | Radio menu | home-screen app: pick each radio from the menu at the top | **Pass**, after a fix. The menu was added during this pass (the home-screen app had no way to change radios). The first try failed because the existing home-screen icon still ran a cached script from before the change (see below); after the icon was removed and added again, the page switched radios in place, with no new sign-in. |
+| SIM-2 | Two devices | iPhone and iPad, same account and radio; key on one, press PTT on the other | **Pass.** The second device showed who was on air and its PTT was refused. |
+| SIM-3 | Fail-safes | key on the iPhone, then switch apps or lock the screen | **Pass.** Back to receive each time; the page released PTT itself (`released`). |
+| SIM-4 | MacBook Pro | the page checks, spacebar PTT | **Pass.** |
+| SIM-5 | Server restart while keyed | key on the iPhone (IC-9700), restart the server | **Pass.** TX stopped the moment the server stopped (`connection_closed`, 39.7 s on air); the page reconnected to the same radio by itself about 10 s later, still signed in. |
+
 ### Observed on iOS
 
 - 2026-11-13, iPhone: after swiping the home-screen app away and relaunching it, audio was heard while the login page showed. The server had no connection from the phone at that moment (no established socket; the login page opens none), so iOS was still playing the previous instance's audio. It stopped by itself after the phone sat idle for a while.
 - Plan: remember the audio route and offer a one-tap "Resume audio" after a relaunch (P5).
+- 2026-11-14, iPhone: a home-screen app kept serving its own cached copy of a script after the server was updated, so the new radio menu showed but did not switch (the cached script lacked a function the new page called). Static files had no cache header, so iOS cached them by its own rules. Now static files carry `Cache-Control: no-cache` and are checked with the server on every load, and the switch no longer depends on that function. Icons added before this change may need to be removed and added again once.
