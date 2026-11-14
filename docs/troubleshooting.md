@@ -43,6 +43,13 @@ the running server first so doctor can talk to the radio.
   The server logs `audio receive at <user>` lines describing late or lost
   frames.
 
+## Constant noise in FM, even with the squelch closed
+
+The radio sends receive audio over USB with the squelch always open unless
+its AF SQL setting is ON (default OFF; seen on the IC-9700). Set it to ON:
+IC-7300 **ACC/USB AF SQL**; IC-705 and IC-9700 **USB AF/IF Output > AF SQL**
+([radio-setup.md](radio-setup.md)). The page's Squelch slider then works too.
+
 ## Transmit audio does not reach the radio
 
 The radio picks its modulation source per mode. For voice modes set **DATA

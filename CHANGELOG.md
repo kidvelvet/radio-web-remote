@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Docs: set the radio's USB AF SQL to ON so FM receive audio goes quiet when
+  squelched (radio-setup.md, troubleshooting.md).
+
 ## 0.1.1 (2026-11-14)
 
 Fixes from a six-round code review made before the repository went public

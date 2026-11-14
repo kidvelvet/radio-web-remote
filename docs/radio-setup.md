@@ -24,6 +24,7 @@ All items are under **MENU > SET > Connectors** unless noted.
 | USB MOD Level | start at **50%**, then adjust using the ALC meter | Too high over-drives ALC and distorts SSB | 50% | 12-7 |
 | ACC/USB Output Select | **AF** | Receive audio over USB | AF | 12-7 |
 | ACC/USB AF Output Level | **50%**, adjust to taste | Receive audio level to the computer | 50% | 12-7 |
+| ACC/USB AF SQL | **ON** | Receive audio over USB follows the radio's squelch, so FM goes quiet when squelched. At OFF (OPEN) the computer always gets open-squelch audio, whatever the squelch setting | OFF (OPEN) | 12-7 |
 | **MENU > SET > Function > Time-Out Timer (CI-V)** | **3 min** (recommended) | A second, radio-side limit on CI-V or [TRANSMIT] transmissions. It covers the one case the server cannot: the server dying while keyed (H7300-4 C showed the key survives that). | OFF | 12-5 |
 
 Setting DATA OFF MOD to USB means the radio's own microphone no longer
@@ -68,6 +69,7 @@ Menu paths are under **MENU > SET > Connectors** unless noted.
 | MOD Input > DATA OFF MOD | **MIC,USB** (default) or USB | Browser or host audio transmits in voice modes; MIC,USB keeps the radio's own mic working too | MIC,USB | 8-15 |
 | MOD Input > DATA MOD | **USB** (default) | Audio in DATA modes | USB | 8-15 |
 | MOD Input > USB MOD Level | start at **50%**, adjust with the ALC meter | | 50% | 8-15 |
+| USB AF/IF Output > AF SQL | **ON** | Receive audio over USB follows the radio's squelch, as on the IC-9700 | not printed in the CI-V guide | CI-V guide p. 7 |
 | USB SEND/Keying > USB SEND | **OFF** for CI-V PTT | | OFF | 8-16 |
 | **MENU > SET > Function > Time-Out Timer** | **3 min** (recommended) | Radio-side limit if the server dies while keyed (a CI-V key survives that, H705-4) | 5 min | 8-4 |
 
@@ -95,6 +97,7 @@ PDF), and the CI-V Reference Guide A7508-3EX-4. Checked on firmware 1.50
 | MOD Input > DATA OFF MOD | **MIC,USB** (or USB) | Browser or host audio transmits in voice modes. At the default MIC,ACC the radio sends a silent carrier from the page (seen in H9700-10) | MIC,ACC | 8-15 |
 | MOD Input > DATA MOD | **USB** | Audio in DATA modes | ACC | 8-15 |
 | MOD Input > USB MOD Level | start at **50%** | | 50% | 8-15 |
+| USB AF/IF Output > AF SQL | **ON** | Receive audio over USB follows the radio's squelch, so FM goes quiet when squelched. At OFF (Open) the page plays constant noise in FM whatever the squelch setting (seen on hardware 2026-11-14; fixed by ON). SSB and CW still give background noise with the squelch open | OFF (Open) | 8-15 |
 | USB SEND/Keying > USB SEND | **OFF** for CI-V PTT | | OFF | 8-15 |
 | **MENU > SET > Function > Time-Out Timer** | **3 min** (recommended) | As for the IC-7300 | OFF | 8-3 |
 
