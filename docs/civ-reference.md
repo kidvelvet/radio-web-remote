@@ -85,20 +85,26 @@ Not yet checked on hardware (docs/hardware-test.md, IC-705 rows).
 | Filters | FIL1 to FIL3, `01` to `03` | 705-CIV pp. 17, 27 | |
 | TX state / PTT | `1C 00` + 00 RX / 01 TX | 705-CIV p. 14 | |
 | Read TX frequency | `1C 03` | 705-CIV pp. 14, 17 | Used by the TX limit check (split) |
-| AF, RF gain, squelch, RF power | `14 01`, `14 02`, `14 03`, `14 0A`, 0000 to 0255 | 705-CIV pp. 3, 4 | Byte order TODO(verify) on hardware |
+| AF, RF gain, squelch, RF power | `14 01`, `14 02`, `14 03`, `14 0A`, 0000 to 0255 | 705-CIV pp. 3, 4 | Most significant pair first, confirmed on hardware (H705-3) |
 | S, Po, SWR, ALC meters | `15 02`, `15 11`, `15 12`, `15 13` | 705-CIV p. 4 | Calibration points as printed there |
 | DATA mode | `1A 06` + 00/01 + filter | 705-CIV pp. 14, 22 | |
-| Scope data | `27 00`; 475 points, 0 to 160; 11 divisions over USB, 1 over WLAN | 705-CIV pp. 15, 28 | Points per division and BCD vs binary not stated: the parser accepts both division encodings; TODO(verify) on hardware |
+| Scope data | `27 00`; 475 points, 0 to 160; 11 divisions over USB, 1 over WLAN | 705-CIV pp. 15, 28 | Hardware (H705-6): division numbers BCD; 9 x 50 + 25 points; Scroll-C header carries edges |
 | Scope on, data output | `27 10`, `27 11`, no selector byte | 705-CIV p. 15 | |
 | Scope mode | `27 14 00` + Center 00 / Fixed 01 / Scroll-C 02 / Scroll-F 03 | 705-CIV p. 15 | |
 | Span, edge, hold | `27 15 00`, `27 16 00` + edge 01 to 04, `27 17 00` | 705-CIV pp. 15, 16, 29 | Four fixed edges |
 | Reference level, speed | `27 19 00`, `27 1A 00` | 705-CIV pp. 16, 29 | Same ranges as listed for the IC-7300 |
 | CI-V menu | Address, Transceive, USB Echo Back only | 705-BM 8-16 | No CI-V baud rate and no USB port link/unlink item |
-| Time-Out Timer | `1A 05 0043`: OFF, 3, 5, 10, 20, 30 min; default 5 min | 705-CIV p. 6; 705-BM 8-4 | `1A 05` numbers not used until read on hardware |
+| Time-Out Timer | `1A 05 0043`: OFF, 3, 5, 10, 20, 30 min; default 5 min | 705-CIV p. 6; 705-BM 8-4 | Read 02 (5 min) on firmware 1.32, matching the menu (H705-8) |
+| Read ID | `19 00`, reply `19 00` + ID | 705-CIV p. 5 | Hardware: ID A4; answered a broadcast (to 00) from the radio's set address (H705-1). Used by `auto_detect_address` |
+| Split, unselected VFO | `0F 00`/`0F 01`; `25 01` + frequency | 705-CIV pp. 3, 15, 27 | Used only in the hardware test (H705-5); not in the table |
 | USB serial ports | "IC-705 Serial Port A (CI-V)" and "Serial Port B" | 705-CIV p. 2; 705-BM 8-16 | Port A carries CI-V |
 
+USB (H705-1, H705-7, macOS): VID:PID 0C26:0036, two serial ports with the
+same serial string (port A CI-V, port B GPS); the codec is two devices named
+"USB Audio CODEC", one per direction, 48 kHz.
+
 Open: FC collision code; transceive destination address; whether `1C 00`
-is broadcast; USB VID/PID and audio sample rate. A PRESET memory can change
+is broadcast. A PRESET memory can change
 the CI-V address and Echo Back (705-AM 9-9).
 
 ## IC-9700

@@ -90,8 +90,12 @@ class IcomCivDriver(RadioDriver):
         address: int | None = None,
         controller_address: int | None = None,
         response_timeout_s: float = 0.5,
+        auto_detect_address: bool = False,
     ) -> None:
         super().__init__()
+        self.auto_detect_address = auto_detect_address
+        self._detected: list[tuple[int, bytes]] = []  # (address, ID) seen while detecting
+        self._detecting = False
         self.model = model
         self.transport = transport
         self.address = model.default_address.value if address is None else address
@@ -131,7 +135,12 @@ class IcomCivDriver(RadioDriver):
         try:
             await self.unkey(verify=True)
         except RadioTimeout as exc:
-            log.warning("TX off on connect not confirmed: %s", exc)
+            if not (self.auto_detect_address and await self._detect_address()):
+                log.warning(
+                    "TX off on connect not confirmed: %s. If the radio is on, check its CI-V "
+                    "address (menu) against civ_address, or set auto_detect_address: true.",
+                    exc,
+                )
         if self.model.supports(CivCommand.SCOPE_BAND):
             with contextlib.suppress(RadioError):
                 self._scope_band = await self._read_flag(CivCommand.SCOPE_BAND)
@@ -151,7 +160,54 @@ class IcomCivDriver(RadioDriver):
         for frame in self.parser.feed(data):
             self._on_frame(frame)
 
+    async def _detect_address(self) -> bool:
+        """Silent at the configured address: broadcast read ID and adopt the one answer.
+
+        The radio's CI-V address is a menu setting, and Icom's IC-705 manual
+        suggests changing it for software that expects another model; a PRESET
+        can change it too (705-AM 9-9). Seen on hardware: an IC-705 set to 94
+        answered the broadcast from 94 with ID A4 (H705-1). TX off goes to the
+        found address straight away.
+        """
+        if not self.model.supports(CivCommand.READ_ID):
+            log.warning("%s: address auto-detect needs 19 00, not in its table", self.model.name)
+            return False
+        self._detected.clear()
+        self._detecting = True
+        try:
+            frame = encode_frame(BROADCAST, self.controller, CivCommand.READ_ID.prefix)
+            async with self._bus.acquire(Priority.URGENT):
+                await self.transport.send_urgent(frame)
+                await asyncio.sleep(self.timeout)
+        finally:
+            self._detecting = False
+        found = {addr for addr, _ in self._detected}
+        if len(found) != 1:
+            log.warning(
+                "%s: address auto-detect got %s",
+                self.model.name,
+                "no answer" if not found else f"answers from {sorted(found)}",
+            )
+            return False
+        old, self.address = self.address, found.pop()
+        log.warning(
+            "%s did not answer at %02X but answered at %02X (ID %s); using %02X. "
+            'Set civ_address: "%02X" in the config to skip this.',
+            self.model.name,
+            old,
+            self.address,
+            self._detected[0][1].hex().upper() or "-",
+            self.address,
+            self.address,
+        )
+        await self.unkey(verify=True)
+        return True
+
     def _on_frame(self, frame: Frame) -> None:
+        if self._detecting and frame.payload.startswith(CivCommand.READ_ID.prefix):
+            if frame.to_addr == self.controller and frame.from_addr != self.controller:
+                self._detected.append((frame.from_addr, frame.payload[2:]))
+            return
         if frame.from_addr == self.controller:
             # USB Echo Back: our own frame coming back. Drop it.
             self.echoes_seen += 1

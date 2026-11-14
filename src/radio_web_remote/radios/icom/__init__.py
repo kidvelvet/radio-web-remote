@@ -21,6 +21,7 @@ def _factory(model: IcomModel) -> registry.DriverFactory:
             address=options.address,
             controller_address=options.controller_address,
             response_timeout_s=options.response_timeout_s,
+            auto_detect_address=options.auto_detect_address,
         )
 
     return make

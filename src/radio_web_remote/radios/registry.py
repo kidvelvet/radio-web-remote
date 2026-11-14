@@ -18,6 +18,9 @@ class DriverOptions:
     address: int | None = None  # protocol address; None = documented default
     controller_address: int | None = None
     response_timeout_s: float = 0.5
+    # If the radio is silent at `address`, ask "who is there?" once and use
+    # the address that answers (Icom: broadcast read ID, 19 00).
+    auto_detect_address: bool = False
 
 
 DriverFactory = Callable[[ByteTransport, DriverOptions], RadioDriver]

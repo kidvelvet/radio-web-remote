@@ -126,3 +126,31 @@ def test_span_encoding_and_real_reply():
     assert sc.decode_span(bytes.fromhex(FIX["settings_replies"]["2715"])[3:]) == 50_000
     with pytest.raises(ValueError):
         sc.encode_span(30_000)
+
+
+FIX705 = json.loads((Path(__file__).parents[1] / "fixtures" / "ic705_scope.json").read_text())
+
+
+@pytest.mark.parametrize(
+    ("mode", "low", "high"),
+    [
+        ("center", 7_122_000, 7_172_000),  # center 7.147, span +/-25 kHz
+        ("fixed", 7_000_000, 7_300_000),
+        ("scroll-c", 7_122_000, 7_172_000),  # Scroll-C header carries edges (guide rev 6 p. 28)
+        ("scroll-f", 7_000_000, 7_300_000),
+    ],
+)
+def test_real_ic705_sweeps(mode, low, high):
+    """IC-705 hardware (H705-6): BCD division numbers, 9 x 50 + 25 points, like the IC-7300."""
+    asm = sc.ScopeAssembler()
+    out = [asm.feed(bytes.fromhex(f)) for f in FIX705["sweeps"][mode]]
+    line = out[-1]
+    assert line is not None and out[:-1] == [None] * 10
+    assert (line.low_hz, line.high_hz, len(line.points)) == (low, high, 475)
+    assert asm.stats.dropped == 0
+
+
+def test_real_ic705_fourth_edge_header():
+    asm = sc.ScopeAssembler()
+    asm.feed(bytes.fromhex(FIX705["edge4_header"]))
+    assert asm._header is not None and asm._header[1:3] == (7_000_000, 7_050_000)

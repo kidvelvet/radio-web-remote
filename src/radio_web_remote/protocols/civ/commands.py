@@ -28,6 +28,7 @@ class CivCommand(Enum):
     SET_MODE = (0x06, b"")
     TX_STATE = (0x1C, b"\x00")  # read with no data, set with 00 (RX) / 01 (TX)
     READ_TX_FREQUENCY = (0x1C, b"\x03")  # read only; same 5-byte format as 03
+    READ_ID = (0x19, b"\x00")  # read the transceiver ID; reply 19 00 + ID
     # Dual-band radios (IC-9700). MAIN/SUB are bands, not VFO A/B.
     BAND_EXCHANGE = (0x07, b"\xb0")  # swap MAIN and SUB
     BAND_MAIN = (0x07, b"\xd0")  # select MAIN

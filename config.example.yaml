@@ -62,7 +62,7 @@ radios: []
 #     baud: 115200                 # IC-7300 scope output needs 115200
 #     civ_address: null            # null = driver default; else quoted hex, e.g. "94"
 #     controller_address: "E0"
-#     auto_detect_address: false
+#     auto_detect_address: false   # true: if silent at civ_address, find the radio by a broadcast read ID
 #     ptt_method: civ              # civ, dtr or rts
 #     audio:
 #       enabled: true

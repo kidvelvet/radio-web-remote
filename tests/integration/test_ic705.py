@@ -120,3 +120,42 @@ async def test_sim_refuses_undocumented_scope_codes(rig):
         await driver._transact(
             driver._SCOPE_SETTINGS["mode"], b"\x27\x14\x00\x04", False
         )  # 04: not in 27 14 0000 ~ 0003
+
+
+async def test_auto_detect_finds_a_changed_address():
+    """H705-1: the maintainer's IC-705 was set to 94 (the IC-7300's address), not A4."""
+    host, radio_end = loopback_pair()
+    sim = IcomSimulator(IC705, address=0x94)
+    attach_loopback(sim, radio_end)
+    await radio_end.open()
+    driver = registry.create(
+        "icom.ic705",
+        host,
+        registry.DriverOptions(response_timeout_s=0.1, auto_detect_address=True),
+    )
+    try:
+        await driver.connect()
+        assert driver.address == 0x94
+        assert await driver.get_frequency() == sim.state.frequency_hz
+        broadcast = [f for f in sim.received if f.to_addr == 0x00]
+        assert [f.payload for f in broadcast] == [b"\x19\x00"]
+        after = sim.received[sim.received.index(broadcast[0]) + 1]
+        assert after.payload == b"\x1c\x00\x00"  # TX off first at the found address
+    finally:
+        await driver.close()
+        await radio_end.close()
+
+
+async def test_no_auto_detect_unless_asked():
+    host, radio_end = loopback_pair()
+    sim = IcomSimulator(IC705, address=0x94)
+    attach_loopback(sim, radio_end)
+    await radio_end.open()
+    driver = registry.create("icom.ic705", host, registry.DriverOptions(response_timeout_s=0.1))
+    try:
+        await driver.connect()
+        assert driver.address == 0xA4
+        assert not [f for f in sim.received if f.to_addr == 0x00]
+    finally:
+        await driver.close()
+        await radio_end.close()

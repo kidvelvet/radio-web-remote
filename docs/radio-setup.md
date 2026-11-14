@@ -52,6 +52,56 @@ was an audio mixer). The radio's own "USB Audio CODEC" is listed but
 disabled, because using it as the browser mic would loop receive audio into
 transmit.
 
-## IC-705, IC-9700
+## IC-705
 
-Added in P4, from each radio's own manual.
+Source: Icom IC-705 Basic Manual A7560D-1EX-7, section 8 (Icom's PDF), and
+the CI-V Reference Guide A7560-8EX-6. Checked on firmware 1.32
+(docs/hardware-test.md, H705 rows).
+
+Menu paths are under **MENU > SET > Connectors** unless noted.
+
+| Setting | Set it to | Why | Default | Page |
+|---------|-----------|-----|---------|------|
+| CI-V > CI-V Address | **A4h**, or match `civ_address`, or set `auto_detect_address: true` | The maintainer's radio was set to 94h (the IC-7300's address, a tip in the Advanced Manual for older software) and did not answer at A4h | A4h | 8-16 |
+| CI-V > CI-V Transceive | **ON** | Front-panel changes reach the page at once | ON | 8-16 |
+| CI-V > CI-V USB Echo Back | either | The driver ignores echoes | OFF | 8-16 |
+| MOD Input > DATA OFF MOD | **MIC,USB** (default) or USB | Browser or host audio transmits in voice modes; MIC,USB keeps the radio's own mic working too | MIC,USB | 8-15 |
+| MOD Input > DATA MOD | **USB** (default) | Audio in DATA modes | USB | 8-15 |
+| MOD Input > USB MOD Level | start at **50%**, adjust with the ALC meter | | 50% | 8-15 |
+| USB SEND/Keying > USB SEND | **OFF** for CI-V PTT | | OFF | 8-16 |
+| **MENU > SET > Function > Time-Out Timer** | **3 min** (recommended) | Radio-side limit if the server dies while keyed (a CI-V key survives that, H705-4) | 5 min | 8-4 |
+
+The IC-705 has no CI-V baud rate or "USB port link/unlink" item. Over USB it
+shows two serial ports: use **Serial Port A** (CI-V). Port B can carry GPS
+sentences or other data (USB (B) Function, 8-16). With `usb_serial` matching,
+the server picks port A; set `match.port` to override.
+
+A PRESET memory can change the CI-V address and echo back (Advanced Manual
+9-9). If the page stops answering after loading a preset, check the address.
+
+## IC-9700
+
+Source: Icom IC-9700 Basic Manual A7508H-1EX-7, sections 8 and 3 (Icom's
+PDF), and the CI-V Reference Guide A7508-3EX-4. Not yet checked on hardware.
+
+| Setting | Set it to | Why | Default | Page |
+|---------|-----------|-----|---------|------|
+| CI-V > CI-V USB Port | **Unlink from [REMOTE]** (default) | USB gets its own CI-V port; needed for scope data | Unlink from [REMOTE] | 8-16 |
+| CI-V > CI-V USB Baud Rate | **115200** | Scope data over USB needs 115200 (CI-V guide p. 12 footnote) | Auto | 8-16 |
+| CI-V > CI-V Address | **A2h**, or match `civ_address` | | A2h | 8-16 |
+| CI-V > CI-V Transceive | **ON** | | ON | 8-16 |
+| CI-V > CI-V USB Echo Back | either | | OFF | 8-16 |
+| MOD Input > DATA OFF MOD | **USB** or MIC,USB | Browser or host audio transmits in voice modes | MIC,ACC | 8-15 |
+| MOD Input > DATA MOD | **USB** | Audio in DATA modes | ACC | 8-15 |
+| MOD Input > USB MOD Level | start at **50%** | | 50% | 8-15 |
+| USB SEND/Keying > USB SEND | **OFF** for CI-V PTT | | OFF | 8-15 |
+| **MENU > SET > Function > Time-Out Timer** | **3 min** (recommended) | As for the IC-7300 | OFF | 8-3 |
+
+Two virtual COM ports appear: **USB (A)** carries CI-V (Basic Manual 8-16).
+"Inhibit Timer at USB Connection" (default ON, 8-16) holds off transmit for a
+few seconds after the USB link comes up, so the first key-up after the
+server connects may be refused by the radio.
+
+Only MAIN transmits, except in split; in satellite mode SUB is the uplink
+(Basic Manual 3-2, 7-1). The server checks the radio's own transmit
+frequency before keying, whichever band the page shows.

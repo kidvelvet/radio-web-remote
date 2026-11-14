@@ -34,6 +34,7 @@ IC705 = IcomModel(
         CivCommand.SET_MODE: _src("3, 17", "06 Set the operating mode"),
         CivCommand.TX_STATE: _src("14", "1C 00 transceiver's status, 00=RX 01=TX"),
         CivCommand.READ_TX_FREQUENCY: _src("14, 17", "1C 03 read the TX frequency"),
+        CivCommand.READ_ID: _src("5", "19 00 read the transceiver ID (hardware: A4, H705-1)"),
         CivCommand.AF_LEVEL: _src("3", "14 01 AF level, 0000=Minimum ~ 0255=Maximum"),
         CivCommand.RF_GAIN: _src("3", "14 02 RF gain, 0000=Minimum ~ 0255=Maximum"),
         CivCommand.SQUELCH: _src("3", "14 03 squelch, 0000=Minimum ~ 0255=Maximum"),

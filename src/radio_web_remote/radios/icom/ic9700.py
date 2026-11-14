@@ -46,6 +46,7 @@ IC9700 = IcomModel(
         CivCommand.SATELLITE: _src("5", "16 5A satellite mode 00 OFF / 01 ON"),
         CivCommand.TX_STATE: _src("11", "1C 00 transceiver's status, 00=RX 01=TX"),
         CivCommand.READ_TX_FREQUENCY: _src("11, 13", "1C 03 read the transmit frequency"),
+        CivCommand.READ_ID: _src("5", "19 00 read the transceiver ID"),
         CivCommand.AF_LEVEL: _src("4", "14 01 AF level, 0000=Minimum to 0255=Maximum"),
         CivCommand.RF_GAIN: _src("4", "14 02 RF gain, 0000=Minimum to 0255=Maximum"),
         CivCommand.SQUELCH: _src("4", "14 03 squelch, 0000=Minimum to 0255=Maximum"),

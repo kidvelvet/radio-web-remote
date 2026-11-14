@@ -250,6 +250,7 @@ class RadioStation:
                 address=self.cfg.civ_address,
                 controller_address=self.cfg.controller_address,
                 response_timeout_s=self._response_timeout,
+                auto_detect_address=self.cfg.auto_detect_address,
             ),
         )
         lost = asyncio.Event()

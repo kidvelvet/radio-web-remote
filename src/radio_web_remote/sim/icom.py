@@ -111,7 +111,8 @@ class IcomSimulator:
         for frame in self.parser.feed(data):
             if self.echo_back:
                 out += frame.encode()
-            if frame.to_addr != self.addr:
+            broadcast_id = frame.to_addr == 0x00 and frame.payload == CivCommand.READ_ID.prefix
+            if frame.to_addr != self.addr and not broadcast_id:
                 continue
             if self.drop_while_busy and now < self._busy_until:
                 self.dropped.append(frame)
@@ -326,6 +327,9 @@ class IcomSimulator:
             if len(data) == 2:
                 self.state.filter_code = data[1]
             return ok
+        if p == CivCommand.READ_ID.prefix and m.supports(CivCommand.READ_ID):
+            # An IC-705 answered with its default address as the ID (H705-1).
+            return p + bytes([m.default_address.value])
         if p == CivCommand.READ_TX_FREQUENCY.prefix and m.supports(CivCommand.READ_TX_FREQUENCY):
             return p + encode_frequency(self.tx_frequency_hz())
         if p.startswith(CivCommand.TX_STATE.prefix) and m.supports(CivCommand.TX_STATE):
