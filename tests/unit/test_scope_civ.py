@@ -183,3 +183,10 @@ def test_real_ic9700_sweeps(key, low, high):
     asm = sc.ScopeAssembler()
     line = [asm.feed(f) for f in frames_][-1]
     assert line is not None and (line.low_hz, line.high_hz, len(line.points)) == (low, high, 475)
+
+
+def test_short_span_reply_is_rejected():
+    """Review A3-3: a short 27 15 answer must not decode to a span the radio never had."""
+    for data in (b"", bytes.fromhex("000050")):
+        with pytest.raises(ReplyError):
+            sc.decode_span(data)

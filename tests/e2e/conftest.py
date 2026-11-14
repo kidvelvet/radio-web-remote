@@ -71,6 +71,19 @@ def server(tmp_path_factory):
         stdin=pw + "\n",
     )
     _cli("user", *common, "add", "lee", "--role", "listener", "--password-stdin", stdin=pw + "\n")
+    _cli(
+        "user",
+        *common,
+        "add",
+        "twenty",
+        "--role",
+        "operator",
+        "--callsign",
+        "N0TW",
+        "--password-stdin",
+        stdin=pw + "\n",
+    )
+    _cli("user", *common, "limits", "twenty", "--bands", "14000000-14350000")
     proc = subprocess.Popen(
         [sys.executable, "-m", "radio_web_remote", "serve", "--simulate", *common],
         stdout=subprocess.PIPE,

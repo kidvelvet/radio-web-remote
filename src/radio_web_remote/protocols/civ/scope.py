@@ -193,4 +193,6 @@ def encode_span(hz: int) -> bytes:
 
 
 def decode_span(data: bytes) -> int:
+    if len(data) != 5:
+        raise ReplyError(f"bad span data {data.hex(' ')}")
     return decode_bcd_le(data)

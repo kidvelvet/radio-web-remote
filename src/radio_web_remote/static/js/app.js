@@ -48,7 +48,7 @@ const STOP_TEXT = {
 
 const app = {
   me: null, ws: null, hello: null, state: null, retry: 500,
-  heartbeat: null, ptt: false, pressed: false, dragging: false, activeLevel: null,
+  heartbeat: null, ptt: false, pressed: false, serverStop: false, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
   scope: null, scopeOn: false,
   audio: null, audioMode: null, rxStats: null, txLevel: null,
@@ -87,6 +87,8 @@ function connect() {
   if (asked && !known.includes(asked)) {
     // A bookmark to a radio that was removed or renamed: the server would refuse it.
     showMsg(`No radio "${asked}" on this server${known.length ? `; showing ${known[0]}` : ""}.`);
+    // Said once: reconnects must not repeat it over a newer message.
+    history.replaceState(null, "", location.pathname + (known[0] ? `?radio=${encodeURIComponent(known[0])}` : ""));
   }
   const radio = asked && known.includes(asked) ? asked : known[0] || "";
   const ws = new WebSocket(`wss://${location.host}/ws?radio=${encodeURIComponent(radio)}`);
@@ -113,6 +115,11 @@ function connect() {
     localPtt(false);
     setLink("down");
     $("ptt").disabled = true;
+    if ($("txbar").dataset.state !== "danger") {  // the last state shown is no longer known
+      $("txbar").dataset.state = "held";
+      setText("txtext", "No link to the server. It stops TX on its own.");
+      setText("txlevel", "");
+    }
     if (ev.code === 4001) { location.replace("/login"); return; }
     if (!ws.opened) {
       // Refused before it opened (the browser reports 1006): maybe the session
@@ -158,6 +165,8 @@ function onError(msg) {
     not_permitted: "Your account cannot transmit.",
     release_first: STOP_TEXT.timeout,
     control_denied: msg.message.replace(/^.*?: /, ""),
+    out_of_limits: msg.message.replace(/^.*?: /, ""),
+    radio_error: msg.message.replace(/^.*?: /, ""),
   }[msg.code] || msg.message;
   showMsg(text);
 }
@@ -245,6 +254,7 @@ function renderTx(s, prev) {
   // release, which can arrive after a newer press is already in effect.
   if (app.ptt && prev?.tx?.transmitting && !tx.transmitting && tx.last_stop !== "released") {
     localPtt(false);
+    app.serverStop = true;
     showMsg(STOP_TEXT[tx.last_stop] ?? "TX stopped.");
   }
 }
@@ -273,14 +283,18 @@ function localPtt(down) {
 function setPtt(down) {
   if (down) {
     if (app.ptt) return;
-    if (app.pressed) {
-      // Toggle mode after a server stop: this tap only releases. Keying again
-      // needs another, deliberate tap (a tap meant as "stop" must not re-key).
+    if (app.pressed) {  // an earlier press still counts (denied, or stopped by the server)
       app.pressed = false;
       send({ type: "ptt", down: false });
-      showMsg("Released. Tap again to transmit.");
-      return;
+      if (app.serverStop) {
+        // Toggle mode after a server stop: this tap only releases. Keying again
+        // needs another, deliberate tap (a tap meant as "stop" must not re-key).
+        app.serverStop = false;
+        showMsg("Released. Tap again to transmit.");
+        return;
+      }
     }
+    app.serverStop = false;
     showMsg(app.audioMode === "remote" || app.audioMode === "host"
       ? "" : "No microphone path: start audio with a mic route to transmit voice.");
     requestWakeLock();
@@ -308,12 +322,13 @@ function wirePtt() {
   // Only the pointer that pressed releases: a second finger tapping a band
   // button must not drop TX. Cancel, blur and hiding still release always.
   const release = (ev) => {
-    if (toggle.checked || (app.pttPointer != null && ev.pointerId !== app.pttPointer)) return;
+    // Space presses set no pointer: a mouse click elsewhere must not drop them.
+    if (toggle.checked || app.pttPointer == null || ev.pointerId !== app.pttPointer) return;
     app.pttPointer = null;
     setPtt(false);
   };
   window.addEventListener("pointerup", release);
-  btn.addEventListener("pointercancel", () => setPtt(false));
+  btn.addEventListener("pointercancel", () => { app.pttPointer = null; setPtt(false); });
   btn.addEventListener("contextmenu", (ev) => ev.preventDefault());
   toggle.addEventListener("change", () => {
     setPtt(false);

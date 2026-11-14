@@ -143,3 +143,11 @@ def test_suggestions_identify_radios_not_ports():
     r = doctor.Report()
     doctor.suggest_radios(r, cfg, [IC705_A, IC705_B])
     assert r.findings == []
+
+
+def test_damaged_user_database_is_a_finding(tmp_path):
+    """Review E3-5: doctor names the problem instead of stopping."""
+    (tmp_path / "users.db").write_bytes(b"not a database at all, just text" * 10)
+    report = doctor.Report()
+    doctor.check_data(report, Config(), tmp_path)
+    assert report.failed and "user database" in report.findings[-1].text

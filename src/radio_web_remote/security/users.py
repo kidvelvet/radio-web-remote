@@ -273,8 +273,14 @@ class UserStore:
                 self._ghosts = {
                     k: v for k, v in self._ghosts.items() if v[1] > now or now - v[2] < window
                 }
-                while len(self._ghosts) > GHOST_LIMIT:  # still a flood: oldest first
-                    self._ghosts.pop(next(iter(self._ghosts)))
+                if len(self._ghosts) > GHOST_LIMIT:  # still a flood
+                    # Unlocked names first, oldest first: dropping a locked one
+                    # would unlock it (and show it is not a real account).
+                    order = sorted(
+                        self._ghosts, key=lambda k: (self._ghosts[k][1] > now, self._ghosts[k][2])
+                    )
+                    for k in order[: len(self._ghosts) - GHOST_LIMIT * 9 // 10]:  # headroom
+                        del self._ghosts[k]
             failed, _, first = self._ghosts.get(username, (0, 0.0, now))
             failed += 1
             if failed >= LOCK_AFTER:

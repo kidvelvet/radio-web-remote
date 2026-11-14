@@ -398,3 +398,18 @@ async def test_close_during_a_waiting_key_does_not_key(rig):
         await press
     await asyncio.sleep(0.2)
     assert not rig.on_air and not rig.tx.status.transmitting
+
+
+async def test_retune_waits_for_a_press_and_is_refused_if_it_keyed(rig):
+    """Review B3-1: a retune that passed the 'held by other' check before another
+    operator's press must not reach the radio once that press has keyed."""
+    task = asyncio.create_task(rig.tx.ptt_down(ALICE))
+    await asyncio.sleep(0)  # ALICE's press holds the key lock
+    with pytest.raises(TxDenied) as info:
+        async with rig.tx.retune_guard(TWENTY_ONLY, 14_100_000):
+            pytest.fail("retune sent under another operator's carrier")
+    assert info.value.reason is DenyReason.HELD_BY_OTHER
+    await task
+    async with rig.tx.retune_guard(ALICE, 7_100_000):  # the holder may retune
+        pass
+    await rig.tx.ptt_up(ALICE)

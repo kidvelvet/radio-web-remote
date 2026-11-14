@@ -80,28 +80,32 @@ param([switch]$Service, [switch]$Uninstall)
     $PyExe, $PyArgs = $Py
 
     Write-Host "Installing radio-web-remote into $Prefix"
-    # A venv whose Python was uninstalled, or made half-way, has no working pip: make it again.
-    $venvPython = Join-Path $Scripts "python.exe"
-    $pipOk = $false
-    if (Test-Path $venvPython) {
-        & $venvPython -m pip --version *> $null
-        $pipOk = ($LASTEXITCODE -eq 0)
-    }
-    if (-not $pipOk) {
-        if (Test-Path (Join-Path $Prefix "venv")) { Remove-Item -Recurse -Force (Join-Path $Prefix "venv") }
-        & $PyExe @PyArgs -m venv (Join-Path $Prefix "venv")
-        if ($LASTEXITCODE -ne 0) { throw "could not create the virtual environment" }
-    }
-    # Stop a running server before replacing its files; it is started again below.
+    # Stop a running server before touching its files (Windows locks them). It is
+    # started again below, also when the upgrade fails.
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     $wasRunning = $task -and $task.State -eq "Running"
     if ($wasRunning) { Stop-ScheduledTask -TaskName $TaskName }
-    & $venvPython -m pip install --quiet --upgrade pip
-    & $venvPython -m pip install --quiet --upgrade $Source
-    if ($LASTEXITCODE -ne 0) { throw "pip could not install $Source" }
-    if ($wasRunning -and -not $Service) {
-        Start-ScheduledTask -TaskName $TaskName
-        Write-Host "Restarted the scheduled task with the new version."
+    try {
+        # A venv whose Python was uninstalled, or made half-way, has no working pip: make it again.
+        $venvPython = Join-Path $Scripts "python.exe"
+        $pipOk = $false
+        if (Test-Path $venvPython) {
+            # try: Windows PowerShell 5.1 turns redirected stderr into a terminating error.
+            try { & $venvPython -m pip --version *> $null; $pipOk = ($LASTEXITCODE -eq 0) } catch { }
+        }
+        if (-not $pipOk) {
+            if (Test-Path (Join-Path $Prefix "venv")) { Remove-Item -Recurse -Force (Join-Path $Prefix "venv") }
+            & $PyExe @PyArgs -m venv (Join-Path $Prefix "venv")
+            if ($LASTEXITCODE -ne 0) { throw "could not create the virtual environment" }
+        }
+        & $venvPython -m pip install --quiet --upgrade pip
+        & $venvPython -m pip install --quiet --upgrade $Source
+        if ($LASTEXITCODE -ne 0) { throw "pip could not install $Source" }
+    } finally {
+        if ($wasRunning -and -not $Service) {
+            Start-ScheduledTask -TaskName $TaskName
+            Write-Host "Started the scheduled task again."
+        }
     }
     Set-UserPath $Scripts $true
     $env:Path = "$Scripts;$env:Path"

@@ -400,13 +400,14 @@ class TxController:
 
     @contextlib.asynccontextmanager
     async def retune_guard(self, op: Operator, hz: int) -> AsyncIterator[None]:
-        """Hold the key lock across a limited user's limit check and retune, so a
-        PTT press cannot be checked against the old frequency and key in between."""
-        if op.limits.bands_hz is None:
-            yield
-            return
+        """Hold the key lock across the holder check, the limit check and the retune,
+        so a PTT press can neither key in between nor be checked against the old
+        frequency."""
         async with self._key_lock:
-            if self._holder is not None and not op.limits.allows_frequency(hz):
+            holder = self._holder
+            if holder is not None and holder.session_id != op.session_id:
+                raise TxDenied(DenyReason.HELD_BY_OTHER, f"TX held by {holder.callsign}")
+            if holder is not None and not op.limits.allows_frequency(hz):
                 raise TxDenied(
                     DenyReason.OUT_OF_LIMITS, f"{hz} Hz is outside your bands while transmitting"
                 )
@@ -463,6 +464,7 @@ class TxController:
             self._unkey_pending
             and now - self._last_unkey_try >= UNKEY_RETRY_S
             and not self._unkey_tasks  # one at a time; a new key waits for it
+            and not self._key_lock.locked()  # a press in progress: its key supersedes this
         ):
             await asyncio.shield(self._spawn_unkey())
 

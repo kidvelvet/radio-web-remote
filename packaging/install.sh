@@ -27,9 +27,11 @@ PY="${PYTHON:-python3}"
 OS="$(uname -s)"
 
 say() { printf '%s\n' "$*"; }
+# A path as a literal inside a pgrep pattern (an extended regular expression).
+re() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'; }
 # This user's server, started through the venv or the command link in $BIN.
-EXE_PATTERN="($PREFIX/venv/bin|$BIN)/radio-web-remote serve"
-LOOP_PATTERN="$PREFIX/radio-web-remote.command"  # the macOS Terminal restart loop
+EXE_PATTERN="($(re "$PREFIX")/venv/bin|$(re "$BIN"))/radio-web-remote serve"
+LOOP_PATTERN="$(re "$PREFIX")/radio-web-remote[.]command"  # the macOS Terminal restart loop
 server_running() { pgrep -u "$(id -u)" -f "$EXE_PATTERN" >/dev/null 2>&1; }
 loop_running() { pgrep -u "$(id -u)" -f "$LOOP_PATTERN" >/dev/null 2>&1; }
 # Services start in the data folder: a stray ./config.yaml elsewhere must not win.
@@ -70,6 +72,8 @@ stop_server() {  # before deleting the program it runs from
     fi
     if server_running; then
         pkill -u "$(id -u)" -f "$EXE_PATTERN" || true
+        i=0  # let it finish shutting down (it sends TX off) before files go away
+        while server_running && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
         say "Stopped the running server."
     fi
 }
@@ -78,6 +82,9 @@ install_service() {
     exe="$PREFIX/venv/bin/radio-web-remote"
     f="$(service_files)"
     [ -n "$f" ] || die "--service is for Linux and macOS; on Windows use install.ps1 -Service"
+    case "$PREFIX$DATA" in  # systemd reads % and \ inside the unit's quoted paths
+        *%*|*\\*) die "--service needs a program and data folder without % or \\ in the path" ;;
+    esac
     mkdir -p "$(dirname "$f")"
     case "$OS" in
         Linux)
@@ -111,12 +118,12 @@ install_service() {
     esac
 }
 
-# Fallbacks when this script runs from a pipe, without the packaging folder.
+# Kept in step with packaging/systemd/radio-web-remote.service (the copy for
+# people who write the unit by hand).
 write_systemd_unit() {
     cat <<EOF
 [Unit]
 Description=radio-web-remote (browser remote for amateur radio transceivers)
-After=network-online.target sound.target
 
 [Service]
 ExecStart="$1" serve

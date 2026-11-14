@@ -175,6 +175,11 @@ jobs:
           Get-Content packaging/install.ps1 -Raw | Invoke-Expression
           & "$env:RWR_PREFIX\venv\Scripts\radio-web-remote.exe" --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # A venv without pip (review E3-1): the second run must rebuild it.
+          Remove-Item -Recurse -Force "$env:RWR_PREFIX\venv\Lib\site-packages\pip"
+          Get-Content packaging/install.ps1 -Raw | Invoke-Expression
+          & "$env:RWR_PREFIX\venv\Scripts\radio-web-remote.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./packaging/install.ps1 -Uninstall
           if (Test-Path "$env:RWR_PREFIX") { throw "uninstall left $env:RWR_PREFIX" }
 

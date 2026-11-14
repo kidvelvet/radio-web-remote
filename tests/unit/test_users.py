@@ -1,3 +1,5 @@
+import contextlib
+
 import pytest
 from argon2 import PasswordHasher
 
@@ -185,3 +187,16 @@ def test_init_with_password_on_stdin_needs_no_callsign(tmp_path, monkeypatch, ca
     assert rc == 0, capsys.readouterr().err
     user = UserStore(tmp_path / "users.db").verify_login("admin", "a-good-password-123")
     assert user.callsign == ""
+
+
+def test_flood_of_names_does_not_unlock_a_locked_one(store, monkeypatch):
+    """Review C3-6: eviction drops unlocked names first."""
+    monkeypatch.setattr(u, "GHOST_LIMIT", 50)
+    for _ in range(u.LOCK_AFTER):
+        with contextlib.suppress(LoginFailed, LockedOut):
+            store.verify_login("victimname", "wrong password here")
+    for n in range(200):
+        with contextlib.suppress(LoginFailed):
+            store.verify_login(f"flood{n}", "wrong password here")
+    with pytest.raises(LockedOut):
+        store.verify_login("victimname", "wrong password here")

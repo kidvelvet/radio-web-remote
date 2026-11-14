@@ -573,7 +573,9 @@ class IcomCivDriver(RadioDriver):
             return self._ptt_generation != generation and self._last_ptt_was_key
 
         def budget(cap: float) -> float:
-            return min(self.timeout, cap, max(0.0, deadline - loop.time()))
+            # Never below the late-reply window: after a stuck command gave up the
+            # bus, the read-back still gets time to hear the radio answer RX.
+            return max(LATE_REPLY_DRAIN_S, min(self.timeout, cap, deadline - loop.time()))
 
         try:
             async with self._bus.acquire(Priority.URGENT, wait_s=UNKEY_BUS_WAIT_S):
@@ -597,10 +599,11 @@ class IcomCivDriver(RadioDriver):
         while loop.time() < deadline:
             if keyed_since():
                 return False  # a newer key owns the PTT state now
-            with contextlib.suppress(RadioError):  # one attempt per read, within the budget
+            # One attempt per read, within the budget. A malformed reply is another miss.
+            with contextlib.suppress(RadioError, ReplyError):
                 async with self._bus.acquire(Priority.URGENT):
                     reply = await self._exchange(
-                        CivCommand.TX_STATE, cmd.read_tx_state(), True, wait_s=budget(deadline)
+                        CivCommand.TX_STATE, cmd.read_tx_state(), True, wait_s=budget(self.timeout)
                     )
                 if not cmd.parse_tx_state(reply.payload):
                     return True

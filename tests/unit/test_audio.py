@@ -127,9 +127,42 @@ async def test_router_closes_a_half_started_backend_before_retrying(monkeypatch)
             self.open = 0
 
     monkeypatch.setattr(router_mod, "RETRY_S", 0.01)
-    radio, host = Fake(False), Fake(True)
+    radio, host = Fake(True), None
     r = router_mod.AudioRouter(radio, host, holder=lambda: None)
     await r.start()
     await asyncio.sleep(0.1)
     assert radio.starts > 2 and radio.open <= 1 and not r.running
     await r.close()
+
+    # Review B3-5: a missing host device is retried on its own and does not
+    # take radio audio away from remote operators.
+    radio, host = Fake(False), Fake(True)
+    r = router_mod.AudioRouter(radio, host, holder=lambda: None)
+    await r.start()
+    await asyncio.sleep(0.1)
+    assert radio.starts == 1 and radio.open == 1 and r.running
+    assert host.starts > 2 and host.open == 0 and "host audio" in r.error
+    await r.close()
+
+
+def test_device_list_not_reloaded_while_another_radio_streams(monkeypatch):
+    """Review B3-2: reloading PortAudio kills every stream in the process."""
+    import sys
+    import types
+
+    from radio_web_remote.audio import backend as be
+
+    calls = []
+    fake_sd = types.SimpleNamespace(
+        _terminate=lambda: calls.append("terminate"), _initialize=lambda: calls.append("init")
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+    a = be.SoundDeviceBackend(None, None, "a")
+    b = be.SoundDeviceBackend(None, None, "b")
+    b._streams.append(object())
+    monkeypatch.setattr(be, "_OPEN", {b})
+    a.reload_devices()
+    assert calls == []
+    be._OPEN.clear()
+    a.reload_devices()
+    assert calls == ["terminate", "init"]

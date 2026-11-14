@@ -7,10 +7,14 @@ people who already run Docker on the radio computer.
 Build and run from the repository root:
 
 ```sh
+docker compose -f packaging/docker/compose.yaml run --rm radio-web-remote radio-web-remote init
 docker compose -f packaging/docker/compose.yaml up -d
-docker compose -f packaging/docker/compose.yaml exec radio-web-remote radio-web-remote init
 docker compose -f packaging/docker/compose.yaml exec radio-web-remote radio-web-remote doctor
 ```
+
+Run `init` first, with `run --rm`: until an admin account exists the server
+exits at once (exit status 78), and Docker keeps restarting it, so `exec`
+cannot reach it.
 
 - **Serial port:** the container sees only the devices you pass in. Give the
   radio's port a stable name with a udev rule ([../udev/](../udev/)) and pass

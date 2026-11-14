@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from radio_web_remote.config import Config
+from radio_web_remote.config import Config, ConfigError
 
 CA_DAYS = 3650
 CA_KEY_BITS = 3072
@@ -300,6 +300,8 @@ def _pair_problem(cert_file: Path, key_file: Path) -> str | None:
         key = serialization.load_pem_private_key(key_file.read_bytes(), password=None)
     except (OSError, ValueError) as exc:
         return f"unreadable ({exc})"
+    except TypeError:  # cryptography: the key is encrypted
+        return "key is encrypted with a passphrase (not supported)"
     pub = serialization.PublicFormat.SubjectPublicKeyInfo
     if cert.public_key().public_bytes(
         serialization.Encoding.DER, pub
@@ -329,7 +331,10 @@ def needs_new_server_cert(cert_file: Path, sans: SanSet) -> str | None:
 def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | None]:
     """Return the files to serve, creating or renewing as needed, and what changed."""
     if cfg.server.tls.cert_file and cfg.server.tls.key_file:
-        return TlsFiles(Path(cfg.server.tls.cert_file), Path(cfg.server.tls.key_file), None), None
+        own = Path(cfg.server.tls.cert_file), Path(cfg.server.tls.key_file)
+        if problem := _pair_problem(*own):
+            raise ConfigError(f"server.tls.cert_file / key_file ({own[0]}, {own[1]}): {problem}")
+        return TlsFiles(*own, None), None
     d = tls_dir(data_dir)
     changed: list[str] = []
     sans = wanted_sans(cfg)
@@ -338,7 +343,7 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
         changed.append("created local CA")
     elif problem := _pair_problem(d / "ca.crt", d / "ca.key"):
         # Not repaired silently: a new CA means every device must install it again.
-        raise ValueError(f"local CA {problem}; run 'radio-web-remote cert reset'")
+        raise ConfigError(f"local CA {problem}; run 'radio-web-remote cert reset'")
     outside = uncovered_by_ca(d / "ca.crt", sans)
     if outside:
         # Issuing them would give clients a certificate they must reject.
@@ -356,8 +361,9 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
         # Keep names the old certificate had, so a briefly missing interface
         # does not drop an address clients already use.
         if (d / "server.crt").exists() and "created local CA" not in changed:
-            old = cert_sans(d / "server.crt")
-            sans = SanSet(sans.dns | old.dns, sans.ips | old.ips)
+            with contextlib.suppress(ValueError):  # unreadable: nothing to keep
+                old = cert_sans(d / "server.crt")
+                sans = SanSet(sans.dns | old.dns, sans.ips | old.ips)
         create_server_cert(d, sans, cfg.server.tls.server_cert_days)
         changed.append(f"issued server certificate ({reason or 'new CA'}) for {sans.describe()}")
     return TlsFiles(d / "server.crt", d / "server.key", d / "ca.crt"), "; ".join(changed) or None

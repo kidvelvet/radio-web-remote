@@ -269,3 +269,111 @@ confirmed with the reviewer's browser probe.
 **Deferred**: C2-5 (a), a 0.5 ms timing difference between a wrong password
 on a real account (a database write) and on an unknown name, measured on an
 SSD. Making them equal means a dummy write per unknown name; left for later.
+
+### Round 3 (2026-11-14): 359 lines changed of 9,161 = 3.9%: continue
+
+Five fresh reviewers, again asked to look hard at the previous round's
+changes. 35 findings, all fixed; two have a part deferred (below). Six were
+regressions or gaps left by round 2 (A3-1, A3-2, B3-1, C3-1, C3-4, D3-1).
+(T) = regression test added, failing before the fix.
+
+**PTT and transmit safety**
+
+- C3-1 (T): a PTT press waiting for earlier controls (round 2, C2-4) blocked
+  reading the socket, so a release sent meanwhile was read only after the key:
+  the radio transmitted with nobody pressing. The waiting press is now a task;
+  a release, a hidden page or a closed socket cancels it while it waits, or
+  lets it finish and then unkeys.
+- B3-1 (T): a limited user's retune that passed the "held by another" check
+  before another operator's press could still go out under that operator's
+  carrier once the press keyed (reproduced). The retune guard now holds the
+  key lock for every user and refuses while someone else holds TX.
+- A3-1 (T): a garbled TX-state answer escaped unkey's read-back (round 2 had
+  bypassed the helper that caught it): no further read-back, no resend, and a
+  failed connect. It now counts as one more miss.
+- A3-2 (T): after a poll whose reply was lost held the bus until its timeout,
+  unkey's read-back went out with no time left and missed the radio's RX
+  answer, giving a false "TX off NOT confirmed". Each unkey wait now gets at
+  least the 50 ms late-reply window.
+- B3-7: the watchdog no longer starts a TX-off retry while a press is keying;
+  a failure of that retry left the alarm up during the new transmission.
+
+**Station and audio**
+
+- B3-2 (T): reloading PortAudio's device list (to see a radio switched on
+  later) closes every stream in the process, so with two radios one retrying
+  station cut the other's audio every 10 s. The reload is skipped while any
+  other stream is open.
+- B3-5 (T): a missing host headset stopped radio audio for remote operators
+  too. The radio codec now decides whether audio runs; the host devices are
+  retried on their own.
+- B3-6: a failed reload no longer leaves PortAudio uninitialised for good.
+- B3-3: a late FA answering a poll counted as a lost link (TX dropped,
+  reconnect); it now skips that poll.
+- B3-4: one lost reply among the ~20 reads at connect failed the whole
+  connect; such a read is now retried by the round robin, and only several in
+  a row count as a lost link. A refused scope re-enable is logged.
+- A3-3 (T): a short span answer is rejected instead of shown as a span the
+  radio never had.
+
+**Web server and security**
+
+- C3-2 (T): coalescing let a frequency meant for the new band overwrite one
+  for the old band and run before the band change (IC-9700). Band changes,
+  swaps and Dualwatch are now barriers.
+- C3-7 (T): made-up level or setting names each took a queue slot without
+  limit; every distinct entry now counts against the cap (raised to 32 so all
+  real controls fit).
+- C3-3 (T): an empty or truncated server certificate crashed the start
+  instead of being reissued.
+- C3-4 and E3-3 (T): a broken local CA printed a traceback and exited 1, so
+  systemd restarted it forever; it is now a config error (one line, exit 78).
+- C3-5: address-throttled audit lines (bad-origin WebSocket attempts, rate
+  limits, lockouts) also have the per-minute global cap, and the throttle
+  table forgets its oldest keys instead of all of them at once.
+- C3-9: the "N more suppressed" audit line is written within a minute of the
+  flood ending, not at the next failed login.
+- C3-6 (T): a flood of unknown names could evict, and so unlock, a locked
+  unknown name; unlocked names go first.
+- C3-8: only a send after the socket closed counts as a routine disconnect;
+  other RuntimeErrors are logged as errors.
+
+**Browser**
+
+- D3-1 (T): in toggle mode, the first tap after a refused press only
+  released (round 2 meant that only after a server stop).
+- D3-2: when the link drops, the TX bar no longer keeps showing ON AIR.
+- D3-3 (T): a mouse click on another control dropped a Space press.
+- D3-4: the "no such radio" message is shown once, not on every reconnect.
+- D3-5 (T): band-limit and radio refusals no longer show the internal code.
+
+**Setup and tooling**
+
+- E3-1: install.ps1's venv check stopped the script under Windows PowerShell
+  5.1 (redirected stderr becomes an error there); CI now runs that repair
+  path under 5.1.
+- E3-2: a failed upgrade left the Windows task stopped; it is restarted in
+  all cases, and the venv is repaired only after the server is stopped.
+- E3-4 (T): your own certificate that is missing or does not match, and a
+  damaged user database, are config errors naming the file; `serve` prints a
+  traceback for other file errors, so the service log shows where.
+- E3-5 (T): doctor reports a damaged user database and a passphrase-protected
+  key as findings instead of stopping.
+- E3-6: the Docker instructions run `init` before `up` (before an admin
+  exists the container restarts, so `exec` cannot reach it).
+- E3-7: install.sh escapes the install paths in its process patterns (a
+  path with brackets, parentheses or `+` hid a running server from
+  uninstall), and `--service` refuses paths with `%` or `\`, which systemd
+  would read.
+- E3-8: install.sh waits up to 5 s for the server to finish shutting down
+  (it sends TX off) before removing files.
+- E3-9 (T): `--data-dir X` now comes before a `./config.yaml`;
+  `config check` takes `--data-dir`.
+- E3-10 (T): the bare-number address error names the file once.
+- E3-11: stale comments fixed; the user unit's `After=` on system targets
+  (which a user unit cannot see) is gone.
+
+**Deferred**: B3-2 (b), one host audio backend per radio opens the same host
+devices more than once; sharing one is a larger change, and only matters with
+two radios and host audio. E3-5 (b), doctor resolves a relative `cert_file`
+against its own working folder, while the service uses the data folder.

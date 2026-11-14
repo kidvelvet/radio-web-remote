@@ -2,7 +2,6 @@ import datetime as dt
 import ipaddress
 import os
 import sys
-from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -95,13 +94,45 @@ def test_new_address_reissues_server_cert_but_keeps_ca(issued):
     assert files.ca_cert_file.read_bytes() == ca_before
 
 
-def test_user_supplied_certificate_is_used_as_is(tmp_path):
+def test_user_supplied_certificate_is_used_as_is(issued, tmp_path):
+    own = issued[0] / "tls"
+    cfg = Config.model_validate(
+        {
+            "server": {
+                "tls": {"cert_file": str(own / "server.crt"), "key_file": str(own / "server.key")}
+            }
+        }
+    )
+    files, changed = tls.ensure_certificates(cfg, tmp_path)
+    assert files.cert_file == own / "server.crt" and files.ca_cert_file is None and changed is None
+    assert not (tmp_path / "tls").exists()
+
+
+def test_unusable_user_certificate_is_a_config_error(tmp_path):
+    """Review E3-4: named in one line, and exit 78, not a restart loop."""
+    from radio_web_remote.config import ConfigError
+
     cfg = Config.model_validate(
         {"server": {"tls": {"cert_file": "/x/c.pem", "key_file": "/x/k.pem"}}}
     )
-    files, changed = tls.ensure_certificates(cfg, tmp_path)
-    assert files.cert_file == Path("/x/c.pem") and files.ca_cert_file is None and changed is None
-    assert not (tmp_path / "tls").exists()
+    with pytest.raises(ConfigError, match=r"server\.tls\.cert_file"):
+        tls.ensure_certificates(cfg, tmp_path)
+
+
+def test_broken_ca_is_a_config_error_and_unreadable_server_cert_is_reissued(tmp_path):
+    """Review C3-3, C3-4."""
+    from radio_web_remote.config import ConfigError
+
+    cfg = Config()
+    tls.ensure_certificates(cfg, tmp_path)
+    d = tls.tls_dir(tmp_path)
+    (d / "server.crt").write_bytes(b"")  # truncated by a crash, say
+    _files, changed = tls.ensure_certificates(cfg, tmp_path)
+    assert changed and "issued server certificate" in changed
+    assert load(d / "server.crt")
+    (d / "ca.key").write_bytes(b"garbage")
+    with pytest.raises(ConfigError, match="cert reset"):
+        tls.ensure_certificates(cfg, tmp_path)
 
 
 def test_cert_and_key_must_be_set_together():

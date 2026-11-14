@@ -135,3 +135,19 @@ def test_config_errors_name_the_field(tmp_path):
     f.write_text("server:\n  https_port: 99999\n")
     with pytest.raises(ConfigError, match=r"server\.https_port"):
         load_config(f)
+
+
+def test_named_data_dir_wins_over_a_stray_config(tmp_path, monkeypatch):
+    """Review E3-9, E3-10."""
+    from radio_web_remote.config import ConfigError, find_config_file
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("RADIO_WEB_REMOTE_CONFIG", raising=False)
+    (tmp_path / "config.yaml").write_text("radios:\n  - id: shack\n    civ_address: 94\n")
+    d = tmp_path / "data"
+    d.mkdir()
+    (d / "config.yaml").write_text("server:\n  https_port: 9443\n")
+    assert find_config_file(None, d) == d / "config.yaml"
+    with pytest.raises(ConfigError) as info:
+        load_config(tmp_path / "config.yaml")
+    assert str(info.value).count("config.yaml") == 1  # the file named once

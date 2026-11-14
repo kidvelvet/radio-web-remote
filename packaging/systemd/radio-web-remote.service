@@ -13,7 +13,6 @@
 
 [Unit]
 Description=radio-web-remote (browser remote for amateur radio transceivers)
-After=network-online.target sound.target
 
 [Service]
 ExecStart="@EXE@" serve

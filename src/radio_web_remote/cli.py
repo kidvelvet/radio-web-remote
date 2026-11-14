@@ -17,6 +17,7 @@ import json
 import sqlite3
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -304,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     cfg_sub = cfg.add_subparsers(dest="config_command", required=True)
     check = cfg_sub.add_parser("check", help="validate config and print effective settings")
     check.add_argument("--config", help="path to config.yaml")
+    check.add_argument("--data-dir", help="state folder whose config.yaml to check")
     check.set_defaults(func=_cmd_config_check)
 
     drv = sub.add_parser("drivers", help="list radio drivers")
@@ -403,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
     except (OSError, sqlite3.Error) as exc:  # missing file, unwritable data folder
+        if args.func is _cmd_serve:  # a service log needs to show where it came from
+            traceback.print_exc()
         where = getattr(exc, "filename", None)
         print(
             f"error: {exc}" + (f" ({where})" if where and str(where) not in str(exc) else ""),

@@ -278,15 +278,25 @@ def find_config_file(
 ) -> Path | None:
     """Return the config file to use, or None to run on defaults.
 
-    Order: explicit argument, $RADIO_WEB_REMOTE_CONFIG, ./config.yaml,
-    <data dir>/config.yaml (the --data-dir folder if one is given).
+    Order: explicit argument, $RADIO_WEB_REMOTE_CONFIG, then ./config.yaml and
+    <data dir>/config.yaml. A --data-dir given on the command line comes before
+    ./config.yaml: naming the folder means its settings.
     """
     if explicit is not None:
         return Path(explicit)
     env = os.environ.get(ENV_CONFIG)
     if env:
         return Path(env)
-    for candidate in (Path("config.yaml"), (data_dir or paths.data_dir()) / "config.yaml"):
+    here = Path("config.yaml")
+    candidates = (
+        (here, paths.data_dir() / "config.yaml")
+        if data_dir is None
+        else (
+            data_dir / "config.yaml",
+            here,
+        )
+    )
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
     return None
@@ -334,6 +344,6 @@ def _reject_bare_int_addresses(file: Path, raw: dict[str, Any]) -> None:
             value = radio.get(key)
             if isinstance(value, int) and not isinstance(value, bool):
                 raise ValueError(
-                    f"{file}: radios[{i}].{key}: write CI-V addresses as quoted hex, "
+                    f"radios[{i}].{key}: write CI-V addresses as quoted hex, "
                     f'for example {key}: "94"'
                 )

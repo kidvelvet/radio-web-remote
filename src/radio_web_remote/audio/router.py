@@ -66,31 +66,50 @@ class AudioRouter:
             self._task = asyncio.create_task(self._keep_running(), name="audio-router")
 
     async def _keep_running(self) -> None:
-        """Start the devices; if a device is missing, keep retrying."""
+        """Start the devices; if a device is missing, keep retrying.
+
+        The radio codec decides whether audio is running. The optional host
+        devices are retried on their own: a missing headset must not take
+        radio audio away from remote operators.
+        """
+        assert self.radio is not None
         reload = False
+        host_up = False
         while True:
-            backends = [b for b in (self.radio, self.host) if b is not None]
-            if self.running and any(b.stalled() for b in backends):
+            if self.running and self.radio.stalled():
                 log.warning("audio device stopped delivering; reopening")
                 self.running, self.error = False, "audio device stopped"
                 await self._stop_all()
-                reload = True
+                host_up, reload = False, True
+            if host_up and self.host is not None and self.host.stalled():
+                log.warning("host audio device stopped delivering; reopening")
+                with contextlib.suppress(Exception):
+                    await self.host.stop()
+                host_up = False
             if not self.running:
                 if reload:  # with every stream closed: see devices plugged in since
                     with contextlib.suppress(Exception):
-                        backends[0].reload_devices()
+                        self.radio.reload_devices()
                     reload = False
                 try:
-                    assert self.radio is not None
                     await self.radio.start()
-                    if self.host is not None:
-                        await self.host.start()
                     self.running, self.error = True, None
                 except Exception as exc:
                     self.error = str(exc) or type(exc).__name__
                     log.warning("audio not available: %s (retrying in %.0f s)", self.error, RETRY_S)
                     await self._stop_all()  # never leave half of it open between tries
                     reload = True
+            if self.running and self.host is not None and not host_up:
+                try:
+                    await self.host.start()
+                    host_up, self.error = True, None
+                except Exception as exc:
+                    error = f"host audio: {exc or type(exc).__name__}"
+                    if error != self.error:
+                        log.warning("%s (retrying in %.0f s)", error, RETRY_S)
+                    self.error = error
+                    with contextlib.suppress(Exception):
+                        await self.host.stop()
             await asyncio.sleep(RETRY_S)
 
     async def _stop_all(self) -> None:

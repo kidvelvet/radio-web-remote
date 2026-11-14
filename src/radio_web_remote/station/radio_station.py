@@ -299,10 +299,21 @@ class RadioStation:
             coverage_hz=driver.coverage_hz(),
         )
         if self._scope_wanted and Feature.SCOPE in driver.features:
-            await driver.set_scope_output(True)  # re-apply after a reconnect
+            try:
+                await driver.set_scope_output(True)  # re-apply after a reconnect
+            except (RadioRejected, RadioBadReply, RadioTimeout) as exc:
+                log.warning("radio %s: scope output not re-enabled: %s", self.cfg.id, exc)
         slow = self._slow_items(driver)
+        timeouts = 0
         for item in slow:  # read everything once up front
-            await self._poll_slow(driver, item)
+            try:
+                await self._poll_slow(driver, item)
+                timeouts = 0
+            except RadioTimeout as exc:  # one lost reply: the round robin reads it later
+                timeouts += 1
+                if timeouts >= self._lost_after:
+                    raise RadioLost(f"no answer to {timeouts} reads in a row") from None
+                log.info("radio %s: %s not read yet: %s", self.cfg.id, item, exc)
         meters = asyncio.create_task(self._meter_loop(driver), name=f"meters-{self.cfg.id}")
         try:
             timeouts = 0
@@ -320,7 +331,7 @@ class RadioStation:
                         await self._poll_slow(driver, slow[turn % len(slow)])
                         turn += 1
                     timeouts = 0
-                except RadioBadReply as exc:
+                except (RadioBadReply, RadioRejected) as exc:  # e.g. a late FA: not a lost link
                     log.warning("radio %s: unexpected reply, poll skipped: %s", self.cfg.id, exc)
                 except RadioTimeout:
                     timeouts += 1

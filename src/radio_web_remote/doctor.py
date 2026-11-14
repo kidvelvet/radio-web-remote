@@ -14,6 +14,7 @@ import errno
 import os
 import platform
 import socket
+import sqlite3
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -143,8 +144,17 @@ def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
         return
     from radio_web_remote.security.users import UserStore
 
-    store = UserStore(db)
-    users, admins = store.list_users(), store.count_admins()
+    try:
+        store = UserStore(db)
+        users, admins = store.list_users(), store.count_admins()
+    except (sqlite3.Error, OSError) as exc:
+        report.add(
+            "fail",
+            t,
+            f"cannot read the user database {db}: {exc}",
+            "Check its permissions; if it is damaged, restore it from a backup.",
+        )
+        return
     report.add(
         "ok" if admins else "fail",
         t,

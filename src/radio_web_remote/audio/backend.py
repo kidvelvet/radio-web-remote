@@ -178,11 +178,15 @@ class SoundDeviceBackend(AudioBackend):
 
     def reload_devices(self) -> None:
         # PortAudio caches its device list; reloading is the only way to see a
-        # device plugged in later. It closes every stream in the process, so the
-        # router calls it only after stopping both backends.
+        # device plugged in later. It closes every stream in the process, so it
+        # is skipped while any backend (another radio's, say) has streams open.
+        if any(b._streams for b in _OPEN):
+            log.debug("audio device list not reloaded: other streams are open")
+            return
         import sounddevice as sd
 
-        sd._terminate()
+        with contextlib.suppress(Exception):  # not initialised after a failed reload
+            sd._terminate()
         sd._initialize()
 
     def _open_streams(self, sd: Any) -> None:
@@ -214,6 +218,7 @@ class SoundDeviceBackend(AudioBackend):
             )
             stream_in.start()
             self._streams.append(stream_in)
+            _OPEN.add(self)
 
         if self.output_device is not None:
 
@@ -236,6 +241,7 @@ class SoundDeviceBackend(AudioBackend):
             )
             stream_out.start()
             self._streams.append(stream_out)
+            _OPEN.add(self)
 
     async def stop(self) -> None:
         for s in self._streams:
@@ -243,6 +249,11 @@ class SoundDeviceBackend(AudioBackend):
                 s.stop()
                 s.close()
         self._streams.clear()
+        _OPEN.discard(self)
+
+
+# Backends with streams open, across every radio: PortAudio is shared by the process.
+_OPEN: set[SoundDeviceBackend] = set()
 
 
 class SimAudioBackend(AudioBackend):

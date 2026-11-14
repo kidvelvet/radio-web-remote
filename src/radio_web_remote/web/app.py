@@ -47,7 +47,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 SESSION_COOKIE = "rwr_session"
 LOGIN_CSRF_COOKIE = "rwr_login_csrf"
 AUDIT_THROTTLE_S = 60.0
-AUDIT_CAP_PER_MIN = 60  # failed-login lines per minute, all addresses together
+AUDIT_CAP_PER_MIN = 60  # lines per minute per event (failed logins, say), all addresses together
 
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -147,16 +147,21 @@ def create_app(
             ctx.audit({"event": event, **fields})
 
     throttle: dict[str, tuple[float, int]] = {}
-    cap = {"minute": 0, "count": 0, "suppressed": 0}
+    caps: dict[str, dict[str, int]] = {}
+
+    def flush_caps(minute: int) -> None:
+        for event, cap in caps.items():
+            if minute != cap["minute"]:
+                if cap["suppressed"]:
+                    audit_event(f"{event}_suppressed", count=cap["suppressed"])
+                cap.update(minute=minute, count=0, suppressed=0)
 
     def audit_capped(event: str, **fields: Any) -> None:
-        """Every failed login is logged, up to AUDIT_CAP_PER_MIN a minute in all;
-        past that a count is logged when the minute ends."""
+        """Logged up to AUDIT_CAP_PER_MIN lines a minute per event, all addresses
+        together; past that a count is logged when the minute ends."""
         minute = int(time.monotonic() // 60)
-        if minute != cap["minute"]:
-            if cap["suppressed"]:
-                audit_event(f"{event}_suppressed", count=cap["suppressed"])
-            cap.update(minute=minute, count=0, suppressed=0)
+        flush_caps(minute)
+        cap = caps.setdefault(event, {"minute": minute, "count": 0, "suppressed": 0})
         if cap["count"] >= AUDIT_CAP_PER_MIN:
             cap["suppressed"] += 1
             return
@@ -172,10 +177,16 @@ def create_app(
         if now - last < AUDIT_THROTTLE_S:
             throttle[k] = (last, suppressed + 1)
             return
-        if len(throttle) > 10_000:
-            throttle.clear()
-        throttle[k] = (now, 0)
-        audit_event(event, ip=ip, suppressed=suppressed, **fields)
+        throttle.pop(k, None)
+        throttle[k] = (now, 0)  # newest last
+        while len(throttle) > 10_000:  # forget the oldest keys, not all of them
+            del throttle[next(iter(throttle))]
+        audit_capped(event, ip=ip, suppressed=suppressed, **fields)  # many keys: capped too
+
+    async def flush_caps_every_minute() -> None:
+        while True:  # a count is written soon after a flood ends, not at the next event
+            await asyncio.sleep(60)
+            flush_caps(int(time.monotonic() // 60))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -183,9 +194,11 @@ def create_app(
             for st in stations.values():
                 await st.start()
         ctx.hub.start()
+        flusher = asyncio.create_task(flush_caps_every_minute())
         try:
             yield
         finally:
+            flusher.cancel()
             await ctx.hub.close()
             if start_stations:
                 for st in stations.values():

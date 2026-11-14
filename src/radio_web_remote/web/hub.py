@@ -59,7 +59,7 @@ MAX_MESSAGE = 4096
 DIAG_S = 5.0  # audio diagnostics window
 # Handled as they arrive; everything else queues for the per-connection worker.
 INLINE_MESSAGES = frozenset({"heartbeat", "ptt", "visibility", "audio", "audio_diag"})
-MAX_PENDING_CONTROLS = 16  # distinct pending controls (repeats of one coalesce)
+MAX_PENDING_CONTROLS = 32  # distinct pending controls (repeats of one coalesce)
 PTT_WAITS_FOR_CONTROLS_S = 2.0  # a key waits this long at most for earlier controls
 
 
@@ -75,6 +75,11 @@ def _coalesce_key(msg: dict[str, Any]) -> str | None:
     return None  # e.g. swap_bands: two swaps are not one
 
 
+# These change which band the other controls act on (IC-9700): nothing before
+# one may coalesce with anything after it.
+BARRIERS = frozenset({"set_band", "swap_bands", "set_dualwatch"})
+
+
 class _Controls:
     """Pending radio controls for one connection, oldest first, coalesced: a spun
     VFO queues one frequency (the latest), not every step, and the last value is
@@ -87,13 +92,21 @@ class _Controls:
         self.idle.set()
         self._n = 0
 
+    def _unique(self) -> str:
+        self._n += 1
+        return f"#{self._n}"
+
     def put(self, msg: dict[str, Any]) -> bool:
         key = _coalesce_key(msg)
+        if key not in self.pending and len(self.pending) >= MAX_PENDING_CONTROLS:
+            return False
+        if msg.get("type") in BARRIERS:
+            # Freeze what is queued: a later frequency for the new band must not
+            # overwrite one queued for the old band and run before the change.
+            self.pending = {self._unique(): m for m in self.pending.values()}
+            key = None
         if key is None:
-            if len(self.pending) >= MAX_PENDING_CONTROLS:
-                return False
-            self._n += 1
-            key = f"#{self._n}"
+            key = self._unique()
         self.pending[key] = msg  # an existing key keeps its place, with the new value
         self.idle.clear()
         self.wake.set()
@@ -130,6 +143,9 @@ class _Conn:
         self.client_diag_t = 0.0
         self.wake = asyncio.Event()
         self.control = _Controls()
+        # A PTT press waiting for earlier controls (see Hub._press).
+        self.press: asyncio.Task[None] | None = None
+        self.press_waiting = False
 
     def push_state(self, state: dict[str, Any]) -> None:
         self.pending_state = state
@@ -279,6 +295,7 @@ class Hub:
 
     async def _teardown(self, conn: _Conn, station: RadioStation) -> None:
         """Unkey first, then anything else that talks to the radio."""
+        await self._settle_press(conn)
         await station.tx.client_gone(conn.op.session_id, StopReason.CONNECTION_CLOSED)
         if conn.scope_on:
             try:
@@ -301,7 +318,10 @@ class Hub:
         exc = task.exception()
         if exc is None:
             return
-        if isinstance(exc, WebSocketDisconnect | RuntimeError):
+        if isinstance(exc, WebSocketDisconnect) or (
+            isinstance(exc, RuntimeError)
+            and conn.ws.application_state is not WebSocketState.CONNECTED
+        ):
             # The socket closed under a send (client gone, or we closed it with 4001).
             log.debug("connection %s helper ended: %r", conn.op.session_id, exc)
         else:
@@ -426,15 +446,39 @@ class Hub:
             except ValueError:
                 conn.push({"type": "error", "code": "bad_json", "message": "invalid JSON"})
                 continue
-            if msg.get("type") in INLINE_MESSAGES:
-                if msg.get("type") == "ptt" and msg.get("down") is True:
-                    # A key waits for controls sent before it (a power or band
-                    # change); a release never waits.
-                    with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(conn.control.idle.wait(), PTT_WAITS_FOR_CONTROLS_S)
+            kind = msg.get("type")
+            if kind in INLINE_MESSAGES:
+                if kind == "ptt" and msg.get("down") is True:
+                    if conn.press is not None and not conn.press.done():
+                        continue  # a repeat while the first press waits
+                    if not conn.control.idle.is_set():
+                        # A key waits for controls sent before it (a power or band
+                        # change), off this loop: a release must still be read.
+                        conn.press_waiting = True
+                        conn.press = asyncio.create_task(self._press(conn, station, msg))
+                        conn.press.add_done_callback(functools.partial(self._helper_done, conn))
+                        continue
+                elif kind == "ptt" or (kind == "visibility" and msg.get("hidden") is True):
+                    await self._settle_press(conn)  # a release lands after its press
                 await self._handle(conn, station, msg)
             elif not conn.control.put(msg):
                 conn.push({"type": "error", "code": "busy", "message": "too many pending controls"})
+
+    async def _press(self, conn: _Conn, station: RadioStation, msg: dict[str, Any]) -> None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(conn.control.idle.wait(), PTT_WAITS_FOR_CONTROLS_S)
+        conn.press_waiting = False  # from here on it keys: never cancelled
+        await self._handle(conn, station, msg)
+
+    async def _settle_press(self, conn: _Conn) -> None:
+        """Before a release: drop a press still waiting, or let one that is keying
+        finish, so the release that follows unkeys it."""
+        press = conn.press
+        if press is None or press.done():
+            return
+        if conn.press_waiting:
+            press.cancel()
+        await asyncio.wait({press})  # wait, not await: cancelling us must not cancel it
 
     def _handle_binary(self, conn: _Conn, station: RadioStation, data: bytes) -> None:
         """Transmit audio from the browser. Silently ignored unless this tab holds TX."""

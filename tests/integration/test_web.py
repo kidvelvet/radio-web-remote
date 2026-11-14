@@ -715,7 +715,61 @@ async def test_controls_coalesce_keeping_the_newest():
         {"type": "set_frequency", "hz": 99},
         {"type": "set_level", "level": "af", "value": 2},
     ]
-    for _ in range(MAX_PENDING_CONTROLS - 2):  # swaps do not coalesce: two are not one
-        assert c.put({"type": "swap_bands"})
+    for n in range(MAX_PENDING_CONTROLS - 2):  # review C3-7: every distinct entry counts
+        assert c.put({"type": "set_level", "level": f"bogus{n}", "value": 1})
+    assert not c.put({"type": "set_level", "level": "bogus-more", "value": 1})
+    assert c.put({"type": "set_frequency", "hz": 7})  # a repeat still coalesces
     assert not c.put({"type": "swap_bands"})
-    assert c.put({"type": "set_frequency", "hz": 7})  # coalescable still accepted
+
+
+async def test_band_changes_are_barriers_for_coalescing():
+    """Review C3-2: a frequency for the new band must not overwrite one for the
+    old band and so run before the band change."""
+    from radio_web_remote.web.hub import _Controls
+
+    c = _Controls()
+    for msg in (
+        {"type": "set_frequency", "hz": 1},
+        {"type": "set_band", "band": "sub"},
+        {"type": "set_frequency", "hz": 2},
+        {"type": "set_frequency", "hz": 3},
+        {"type": "swap_bands"},
+        {"type": "set_frequency", "hz": 4},
+    ):
+        assert c.put(msg)
+    assert [m.get("hz", m["type"]) for m in c.pending.values()] == [
+        1,
+        "set_band",
+        3,
+        "swap_bands",
+        4,
+    ]
+
+
+def test_release_during_a_press_waiting_for_controls_never_keys(env, monkeypatch):
+    """Review C3-1: a press waiting for earlier controls must not block reading
+    the socket; a release sent meanwhile cancels it, so the radio never keys."""
+    import asyncio
+
+    station, sim = env["station"], env["sim"]
+
+    async def slow_level(op, level, value):
+        await asyncio.sleep(0.6)  # a radio command that times out and retries
+
+    monkeypatch.setattr(station, "set_level", slow_level)
+    c = env["client"]
+    login(c)
+    with wsc(c, "/ws") as ws:
+        ws.receive_json()
+        before = list(sim.tx_history)
+        ws.send_json({"type": "set_level", "level": "af", "value": 9})
+        ws.send_json({"type": "ptt", "down": True})
+        ws.send_json({"type": "ptt", "down": False})
+        ws.send_json({"type": "heartbeat"})
+        time.sleep(1.0)  # past the slow control: a waiting press would have keyed by now
+        assert True not in sim.tx_history[len(before) :]
+        # Without a release, the press keys once the control is done.
+        ws.send_json({"type": "set_level", "level": "af", "value": 9})
+        ws.send_json({"type": "ptt", "down": True})
+        recv_until(ws, keyed)
+        ws.send_json({"type": "ptt", "down": False})

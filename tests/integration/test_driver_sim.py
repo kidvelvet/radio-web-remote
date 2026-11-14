@@ -341,3 +341,47 @@ async def test_malformed_reply_is_a_radio_error(rig):
     )
     with pytest.raises(RadioBadReply):
         await driver.get_frequency()
+
+
+# -- review round 3 ------------------------------------------------------------
+
+
+async def test_unkey_treats_a_malformed_read_back_as_a_miss(rig):
+    """Review A3-1: a garbled TX-state answer must not end the confirmation."""
+    driver, sim, _ = rig
+    original = sim._handle
+    bad = {"left": 1}
+
+    def garble_once(frame, now):
+        if bad["left"] and frame.payload == b"\x1c\x00":
+            bad["left"] -= 1
+            return b"\x1c\x00\x02"
+        return original(frame, now)
+
+    sim._handle = garble_once
+    await driver.key()
+    assert await driver.unkey() is True
+    assert not sim.state.transmitting and not bad["left"]
+
+
+async def test_unkey_confirms_after_a_stuck_poll(rig):
+    """Review A3-2: a poll whose reply was lost holds the bus until its timeout;
+    the read-back after it must still have time to hear the radio say RX."""
+    driver, sim, _ = rig
+    driver.timeout = 0.5  # as long as the whole confirmation window
+    original = sim._handle
+    lost = {"left": 1}
+
+    def lose_one_poll(frame, now):
+        if lost["left"] and frame.payload == b"\x03":
+            lost["left"] -= 1
+            return None
+        return original(frame, now)
+
+    await driver.key()
+    sim._handle = lose_one_poll
+    poll = asyncio.create_task(driver.get_frequency())
+    await asyncio.sleep(0.01)
+    assert await driver.unkey() is True
+    assert not sim.state.transmitting
+    await poll

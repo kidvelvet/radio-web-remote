@@ -122,6 +122,38 @@ def test_toggle_ptt(page: Page, server):
     expect(page.locator("#txtext")).to_have_text("Receive", timeout=5_000)
 
 
+def test_toggle_tap_after_a_denial_keys(page: Page, server):
+    """Review D3-1: only a tap after a server stop is "release only"; after a
+    refused press the next tap transmits."""
+    login(page, server, "twenty")
+    page.check("#toggle")
+    page.fill("#entry", "7.074")
+    page.press("#entry", "Enter")
+    expect(page.locator("#freqtext")).to_have_text("7.074.000")
+    page.click("#ptt")  # outside this user's band: refused
+    expect(page.locator("#msg")).to_contain_text("outside", timeout=5_000)
+    expect(page.locator("#msg")).not_to_contain_text("out_of_limits")  # review D3-5
+    page.click("#bands button:has-text('20m')")
+    expect(page.locator("#freqtext")).to_have_text("14.200.000")
+    page.click("#ptt")
+    expect(page.locator("#txtext")).to_have_text(re.compile(r"ON AIR\s+N0TW"), timeout=5_000)
+    page.click("#ptt")
+    expect(page.locator("#txtext")).to_have_text("Receive", timeout=5_000)
+
+
+def test_mouse_click_elsewhere_keeps_space_ptt(page: Page, server):
+    """Review D3-3: a click on another control must not drop a Space press."""
+    login(page, server)
+    page.locator("#freq").focus()
+    page.keyboard.down("Space")
+    expect(page.locator("#txtext")).to_have_text(re.compile("ON AIR"), timeout=5_000)
+    page.click("#up")
+    page.wait_for_timeout(500)
+    expect(page.locator("#txtext")).to_have_text(re.compile("ON AIR"))
+    page.keyboard.up("Space")
+    expect(page.locator("#txtext")).to_have_text("Receive", timeout=5_000)
+
+
 def test_other_user_sees_tx_held(page: Page, server, browser):
     login(page, server)
     other_ctx = browser.new_context(base_url=server["url"], ignore_https_errors=True)
