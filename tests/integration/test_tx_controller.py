@@ -104,6 +104,7 @@ async def test_missed_heartbeats_unkey_within_timeout(rig):
     await rig.tx.ptt_down(ALICE)
     await keep_alive(rig, ALICE, 0.6)  # heartbeats keep it keyed past the timeout length
     assert rig.on_air
+    rig.tx.heartbeat(ALICE)  # the last heartbeat, so elapsed is measured from it
     t0 = asyncio.get_running_loop().time()
     while rig.on_air:
         await asyncio.sleep(0.01)
