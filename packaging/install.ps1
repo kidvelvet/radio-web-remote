@@ -23,7 +23,7 @@ param([switch]$Service, [switch]$Uninstall)
     param([bool]$Service, [bool]$Uninstall)
     $ErrorActionPreference = "Stop"
 
-    $Version = "0.1.0"
+    $Version = "0.1.1"
     $Repo = "https://github.com/kidvelvet/radio-web-remote"
     $Source = if ($env:RWR_SOURCE) { $env:RWR_SOURCE } else {
         "$Repo/releases/download/v$Version/radio_web_remote-$Version-py3-none-any.whl"

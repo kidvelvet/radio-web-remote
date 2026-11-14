@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "radio-web-remote"
-version = "0.1.0"
+version = "0.1.1"
 description = "Self-hosted browser remote control for amateur radio transceivers over USB"
 readme = "README.md"
 license = "MIT"

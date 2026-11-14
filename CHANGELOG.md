@@ -1,12 +1,37 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-11-14)
+
+Fixes from a six-round code review made before the repository went public
+(184 fixes, each listed in [docs/review-changelog.md](docs/review-changelog.md)),
+and a radio menu.
+
+### Added
 
 - With more than one radio, a menu at the top of the page switches between
   them in place: audio and the scope keep running, and PTT is released before
   the switch. The page, and the home-screen app, open on the radio used last.
 - Scripts and style sheets are checked with the server on every load, so a
   browser never runs a cached script against a newer page after an upgrade.
+
+### Fixed
+
+- Transmit safety: each PTT press carries an id, so a late refusal of an
+  earlier press never drops a newer one, and a press can be cancelled until
+  it keys. A release sent while the server was still reading the transmit
+  frequency (IC-705, IC-9700) no longer arrives after the key.
+- A stop by another operator, or a second tab on the same account, no longer
+  leaves a page showing PTT released while the radio still transmits.
+- TX off is resent after 0.15 s when the radio does not confirm it, and is
+  confirmed in time even when another command is stuck on the radio's bus.
+- `doctor` now fails a damaged user database or a broken local CA, the same
+  problems the server refuses to start with.
+- The Docker build no longer copies private keys kept in subfolders.
+- Install scripts: an upgrade restarts a running Linux service, no longer
+  deletes the program under a running server, and finds PortAudio on Debian;
+  on Windows the scheduled task is stopped before an upgrade and started
+  again afterwards, also when the upgrade fails, and the user PATH keeps its
+  variables.
 
 ## 0.1.0 (2026-11-14)
 
