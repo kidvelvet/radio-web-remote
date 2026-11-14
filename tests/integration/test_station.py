@@ -27,8 +27,8 @@ CAROL = Operator(
 class Bench:
     """A simulator that survives reconnects; each connect gets a fresh loopback link."""
 
-    def __init__(self) -> None:
-        self.sim = IcomSimulator(IC7300)
+    def __init__(self, model=IC7300) -> None:
+        self.sim = IcomSimulator(model)
         self.links: list[tuple] = []
 
     def factory(self):
@@ -232,3 +232,52 @@ async def test_radio_loss_while_keyed_still_warns(bench):
     await bench.station.tx.ptt_down(ALICE)
     bench.sim.silent = True
     await wait_for(lambda: bench.station.state.tx.unkey_unconfirmed, timeout=3.0)
+
+
+@pytest.fixture
+async def bench9700():
+    from radio_web_remote.radios.icom import IC9700
+
+    b = Bench(IC9700)
+    st = RadioStation(
+        RadioConfig(id="ic9700", driver="icom.ic9700"),
+        PttConfig(heartbeat_interval_s=0.1, heartbeat_timeout_s=0.5),
+        transport_factory=b.factory,
+        poll_interval_s=0.05,
+        lost_after_timeouts=2,
+        backoff_s=(0.05, 0.2),
+        response_timeout_s=0.1,
+        tx_watchdog_s=0.02,
+    )
+    await st.start()
+    await wait_for(lambda: st.connected)
+    b.station = st
+    yield b
+    await st.close()
+
+
+async def test_band_state_and_controls(bench9700):
+    st, sim = bench9700.station, bench9700.sim
+    await wait_for(lambda: st.state.band == "main" and st.state.satellite is False)
+    assert st.state.coverage_hz[0] == (144_000_000, 148_000_000)
+    await st.set_band(ALICE, "sub")
+    assert (st.state.band, st.state.frequency_hz) == ("sub", 432_100_000)
+    await st.swap_bands(ALICE)
+    assert (st.state.band, st.state.frequency_hz) == ("sub", 144_200_000)
+    with pytest.raises(ControlDenied):
+        await st.set_band(LEE, "main")  # listeners cannot
+    sim.state.selected_band = 0  # changed at the radio: a slow poll notices
+    sim._swap_band_values()
+    await wait_for(lambda: st.state.band == "main", timeout=3.0)
+
+
+async def test_band_change_refused_while_transmitting(bench9700):
+    st = bench9700.station
+    await st.tx.ptt_down(ALICE)
+    try:
+        with pytest.raises(ControlDenied):
+            await st.set_band(ALICE, "sub")  # not even the TX holder
+        with pytest.raises(ControlDenied):
+            await st.swap_bands(ALICE)
+    finally:
+        await st.tx.ptt_up(ALICE)

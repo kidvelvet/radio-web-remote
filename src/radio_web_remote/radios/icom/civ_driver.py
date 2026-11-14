@@ -39,6 +39,7 @@ from radio_web_remote.radios.base import (
     Mode,
     ModeSetting,
     RadioDriver,
+    RadioError,
     RadioRejected,
     RadioTimeout,
     StateEvent,
@@ -103,6 +104,9 @@ class IcomCivDriver(RadioDriver):
         self._ptt_generation = 0
         spec = model.scope
         self.scope = sc.ScopeAssembler(spec.points, spec.max_value) if spec else None
+        # 27 1x selector byte: the scope's band (00 MAIN / 01 SUB). Always 00 on
+        # single-band radios; on the IC-9700 it follows 27 12 and the 27 00 data.
+        self._scope_band = 0
 
     # -- RadioDriver properties ----------------------------------------
     @property
@@ -128,6 +132,9 @@ class IcomCivDriver(RadioDriver):
             await self.unkey(verify=True)
         except RadioTimeout as exc:
             log.warning("TX off on connect not confirmed: %s", exc)
+        if self.model.supports(CivCommand.SCOPE_BAND):
+            with contextlib.suppress(RadioError):
+                self._scope_band = await self._read_flag(CivCommand.SCOPE_BAND)
 
     async def close(self) -> None:
         if self.transport.is_open:
@@ -161,6 +168,9 @@ class IcomCivDriver(RadioDriver):
 
     def _unsolicited(self, frame: Frame) -> None:
         if frame.payload.startswith(sc.SCOPE_DATA):
+            band = frame.payload[2] if len(frame.payload) > 2 else None
+            if band in (0, 1) and self.model.supports(CivCommand.SCOPE_BAND):
+                self._scope_band = band  # 27 00 byte 1: 00 Main / 01 Sub scope
             if self.scope is not None:
                 try:
                     line = self.scope.feed(frame.payload)
@@ -319,13 +329,17 @@ class IcomCivDriver(RadioDriver):
     def scope_edges(self) -> int:
         return self.model.scope.edges if self.model.scope else 0
 
+    def coverage_hz(self) -> tuple[tuple[int, int], ...]:
+        return self.model.coverage_hz
+
     def scope_settings_supported(self) -> list[str]:
         return [k for k, c in self._SCOPE_SETTINGS.items() if self.model.supports(c)]
 
     async def get_scope_setting(self, name: str) -> Any:
         command = self._SCOPE_SETTINGS[name]
-        reply = await self._transact(command, command.prefix + b"\x00", True, Priority.POLL)
-        data = reply.payload[len(command.prefix) + 1 :]  # after the 00 selector
+        sel = bytes([self._scope_band])
+        reply = await self._transact(command, command.prefix + sel, True, Priority.POLL)
+        data = reply.payload[len(command.prefix) + 1 :]  # after the selector
         if name == "span":
             return sc.decode_span(data)
         if name == "ref":
@@ -365,7 +379,40 @@ class IcomCivDriver(RadioDriver):
             data = bytes([sc.SPEEDS.index(value)])
         else:
             raise ValueError(f"unknown scope setting {name!r}")
-        await self._transact(command, command.prefix + b"\x00" + data, False)
+        await self._transact(command, command.prefix + bytes([self._scope_band]) + data, False)
+
+    # -- MAIN / SUB (IC-9700) ------------------------------------------------
+    async def _read_flag(self, command: CivCommand) -> int:
+        """Read a command answering prefix + 00/01."""
+        self._require(command)
+        reply = await self._transact(command, command.prefix, True, Priority.POLL)
+        data = reply.payload[len(command.prefix) :]
+        if len(data) != 1 or data[0] not in (0, 1):
+            raise ReplyError(f"bad {command.name} reply: {reply.payload.hex(' ')}")
+        return data[0]
+
+    async def get_band(self) -> str:
+        return ("main", "sub")[await self._read_flag(CivCommand.BAND_SELECTION)]
+
+    async def set_band(self, band: str) -> None:
+        command = {"main": CivCommand.BAND_MAIN, "sub": CivCommand.BAND_SUB}.get(band)
+        if command is None:
+            raise ValueError("band must be main or sub")
+        self._require(command)
+        await self._transact(command, command.prefix, False)
+        if self.model.supports(CivCommand.SCOPE_BAND):  # the scope follows the selected band
+            index = 0 if band == "main" else 1
+            await self._transact(
+                CivCommand.SCOPE_BAND, CivCommand.SCOPE_BAND.prefix + bytes([index]), False
+            )
+            self._scope_band = index
+
+    async def swap_bands(self) -> None:
+        self._require(CivCommand.BAND_EXCHANGE)
+        await self._transact(CivCommand.BAND_EXCHANGE, CivCommand.BAND_EXCHANGE.prefix, False)
+
+    async def get_satellite(self) -> bool:
+        return await self._read_flag(CivCommand.SATELLITE) == 1
 
     # -- PTT -------------------------------------------------------------
     async def get_ptt(self) -> bool:

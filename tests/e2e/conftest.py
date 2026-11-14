@@ -44,6 +44,7 @@ def server(tmp_path_factory):
         "radios:\n"
         "  - id: sim-ic7300\n    driver: icom.ic7300\n"
         "  - id: sim-ic705\n    driver: icom.ic705\n"
+        "  - id: sim-ic9700\n    driver: icom.ic9700\n"
     )
     pw = secrets.token_urlsafe(16)
     common = ["--config", str(cfg), "--data-dir", str(d)]

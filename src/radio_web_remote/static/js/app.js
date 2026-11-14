@@ -10,11 +10,31 @@ import { Scope } from "./scope.js";
 const $ = (id) => document.getElementById(id);
 
 // Tuning presets inside each band (not band edges; limits come from the server).
+// Band shortcuts. Shown when the radio's documented coverage includes them;
+// with no coverage on record (IC-7300), the HF and 6 m ones are shown.
 const BANDS = [
-  ["160", 1_900_000], ["80", 3_750_000], ["40", 7_150_000], ["30", 10_120_000],
-  ["20", 14_200_000], ["17", 18_120_000], ["15", 21_250_000], ["12", 24_950_000],
-  ["10", 28_400_000], ["6", 50_125_000],
+  ["160m", 1_900_000], ["80m", 3_750_000], ["40m", 7_150_000], ["30m", 10_120_000],
+  ["20m", 14_200_000], ["17m", 18_120_000], ["15m", 21_250_000], ["12m", 24_950_000],
+  ["10m", 28_400_000], ["6m", 50_125_000], ["2m", 144_200_000], ["70cm", 432_100_000],
+  ["23cm", 1_296_100_000],
 ];
+
+function buildBands(coverage) {
+  const box = $("bands");
+  const key = JSON.stringify(coverage || []);
+  if (box.dataset.coverage === key) return;
+  box.dataset.coverage = key;
+  const inside = (hz) => (coverage && coverage.length
+    ? coverage.some(([lo, hi]) => hz >= lo && hz <= hi)
+    : hz < 100_000_000);
+  box.replaceChildren(...BANDS.filter(([, hz]) => inside(hz)).map(([name, hz]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = name;
+    b.addEventListener("click", () => jumpTo(hz));
+    return b;
+  }));
+}
 const PX_PER_STEP = 8;        // drag distance per tuning step
 const SEND_EVERY_MS = 60;     // throttle for tune and level messages
 const STOP_TEXT = {
@@ -139,6 +159,9 @@ function render(s) {
     $("freq").setAttribute("aria-valuetext", `${fmtHz(s.frequency_hz)} megahertz`);
   }
   if (!prev || (prev.modes || []).join() !== (s.modes || []).join()) buildModes(s.modes || []);
+  buildBands(s.coverage_hz);
+  document.querySelectorAll("[data-band]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.band === s.band)));
+  $("satnote").classList.toggle("hidden", !s.satellite);
   document.querySelectorAll("#modes button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === s.mode)));
   document.querySelectorAll("[data-filter]").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.filter) === s.filter)));
   $("data").setAttribute("aria-pressed", String(!!s.data_mode));
@@ -352,14 +375,11 @@ function wireTuning() {
     $("entry").value = "";
     $("entry").blur();
   });
-  const bands = $("bands");
-  for (const [name, hz] of BANDS) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = `${name}m`;
-    b.addEventListener("click", () => jumpTo(hz));
-    bands.append(b);
-  }
+  buildBands(null);
+  document.querySelectorAll("[data-band]").forEach((b) => b.addEventListener("click", () => {
+    send({ type: "set_band", band: b.dataset.band });
+  }));
+  $("band-swap").addEventListener("click", () => send({ type: "swap_bands" }));
 }
 
 // ---------- mode, filter, levels ----------

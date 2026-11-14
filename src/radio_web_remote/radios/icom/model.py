@@ -75,6 +75,11 @@ class IcomModel:
     # Highest frequency the frequency encoding allows for this model. A real
     # band-edge table is P1 work; this only stops nonsense values.
     max_encodable_hz: int = 9_999_999_999
+    # Receive coverage of the USA version, from the specifications page. Only
+    # used to choose which band shortcuts the page shows; versions differ, so
+    # it is never used to refuse a frequency (the radio answers NG itself).
+    coverage_hz: tuple[tuple[int, int], ...] = ()
+    coverage_source: Source | None = None
 
     def supports(self, command: CivCommand) -> bool:
         return command in self.commands
@@ -92,6 +97,11 @@ class IcomModel:
             f.add(Feature.PTT)
         if CivCommand.READ_TX_FREQUENCY in self.commands:
             f.add(Feature.TX_FREQUENCY)
+        bands = {CivCommand.BAND_MAIN, CivCommand.BAND_SUB, CivCommand.BAND_SELECTION}
+        if bands <= self.commands.keys():
+            f.add(Feature.MAIN_SUB)
+        if CivCommand.SATELLITE in self.commands:
+            f.add(Feature.SATELLITE)
         if CivCommand.TRANSCEIVE_FREQUENCY in self.commands:
             f.add(Feature.TRANSCEIVE)
         if CivCommand.DATA_MODE in self.commands:

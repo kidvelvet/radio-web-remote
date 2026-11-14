@@ -133,17 +133,21 @@ class ScopeAssembler:
         return ScopeLine(low, high, clipped, self.max_value, mode != MODE_CENTER, out_of_range)
 
 
-def sweep_frames(line: ScopeLine, mode: int, center_hz: int, span_hz: int) -> list[bytes]:
-    """Build the 11 division payloads a radio would send for one sweep (simulator)."""
+def sweep_frames(
+    line: ScopeLine, mode: int, center_hz: int, span_hz: int, band: int = 0
+) -> list[bytes]:
+    """Build the 11 division payloads a radio would send for one sweep (simulator).
+
+    band: the first data byte, 00 Main / 01 Sub scope on the IC-9700, else 00."""
     if mode == MODE_CENTER:
         info = encode_bcd_le(center_hz, 5) + encode_bcd_le(span_hz, 5)
     else:
         info = encode_bcd_le(line.low_hz, 5) + encode_bcd_le(line.high_hz, 5)
-    out = [SCOPE_DATA + bytes([0x00, 0x01, 0x11, mode]) + info + bytes([int(line.out_of_range)])]
+    out = [SCOPE_DATA + bytes([band, 0x01, 0x11, mode]) + info + bytes([int(line.out_of_range)])]
     pts = b"" if line.out_of_range else line.points
     chunks = [pts[i : i + 50] for i in range(0, 475, 50)] if pts else [b""] * 10
     for i, chunk in enumerate(chunks, start=2):
-        out.append(SCOPE_DATA + bytes([0x00, (i // 10) << 4 | (i % 10), 0x11]) + chunk)
+        out.append(SCOPE_DATA + bytes([band, (i // 10) << 4 | (i % 10), 0x11]) + chunk)
     return out
 
 

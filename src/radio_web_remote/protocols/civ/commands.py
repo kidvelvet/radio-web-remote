@@ -28,6 +28,14 @@ class CivCommand(Enum):
     SET_MODE = (0x06, b"")
     TX_STATE = (0x1C, b"\x00")  # read with no data, set with 00 (RX) / 01 (TX)
     READ_TX_FREQUENCY = (0x1C, b"\x03")  # read only; same 5-byte format as 03
+    # Dual-band radios (IC-9700). MAIN/SUB are bands, not VFO A/B.
+    BAND_EXCHANGE = (0x07, b"\xb0")  # swap MAIN and SUB
+    BAND_MAIN = (0x07, b"\xd0")  # select MAIN
+    BAND_SUB = (0x07, b"\xd1")  # select SUB
+    BAND_SELECTION = (0x07, b"\xd2")  # read: + 00 MAIN / 01 SUB selected
+    DUALWATCH = (0x16, b"\x59")  # SUB receiver 00 OFF / 01 ON
+    SATELLITE = (0x16, b"\x5a")  # satellite mode 00 OFF / 01 ON
+    SCOPE_BAND = (0x27, b"\x12")  # scope shows 00 MAIN / 01 SUB; also the 27 1x selector
     AF_LEVEL = (0x14, b"\x01")
     RF_GAIN = (0x14, b"\x02")
     SQUELCH = (0x14, b"\x03")

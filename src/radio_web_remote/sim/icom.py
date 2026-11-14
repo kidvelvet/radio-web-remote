@@ -38,6 +38,13 @@ TRANSCEIVE_TO = 0x00  # observed on IC-7300 hardware; see civ_driver.BROADCAST
 class SimState:
     frequency_hz: int = 14_074_000
     split_tx_hz: int | None = None  # test hook: TX elsewhere, as with split
+    # Dual-band radios: frequency_hz/mode_code/filter_code above belong to the
+    # selected band; the other band's values are kept here.
+    selected_band: int = 0  # 0 MAIN, 1 SUB
+    other_band: tuple[int, int, int] = (432_100_000, 0x01, 0x01)  # freq, mode, filter
+    satellite: bool = False  # TX on SUB (uplink)
+    dualwatch: bool = True
+    scope_band: int = 0  # 27 12
     mode_code: int = 0x01  # USB on the IC-7300 table
     filter_code: int = 0x01
     transmitting: bool = False
@@ -85,6 +92,9 @@ class IcomSimulator:
     def __post_init__(self) -> None:
         if self.address is None:
             self.address = self.model.default_address.value
+        start = _START_HZ.get(self.model.driver_name)
+        if start is not None and self.state.frequency_hz == SimState.frequency_hz:
+            self.state.frequency_hz = start
         self._busy_until = 0.0
         self._rx_at: float | None = None  # when a pending TX -> RX switch completes
 
@@ -156,7 +166,15 @@ class IcomSimulator:
                     st.scope_on = True
                 return ok
             return ng
-        if not data or data[0] != 0x00:
+        dual = self.model.supports(CivCommand.SCOPE_BAND)
+        if sub == b"\x12" and dual:
+            if not data:
+                return p + bytes([st.scope_band])
+            if data in (b"\x00", b"\x01"):
+                st.scope_band = data[0]
+                return ok
+            return ng
+        if not data or data[0] not in ((0x00, 0x01) if dual else (0x00,)):
             return ng
         arg = data[1:]
         simple = {b"\x14": "scope_mode", b"\x16": "scope_edge", b"\x1a": "scope_speed"}
@@ -191,9 +209,48 @@ class IcomSimulator:
         return ng
 
     def tx_frequency_hz(self) -> int:
-        """1C 03: the frequency a key-up would use."""
+        """1C 03: the frequency a key-up would use: MAIN, or SUB in satellite mode."""
         st = self.state
-        return st.split_tx_hz if st.split_tx_hz is not None else st.frequency_hz
+        if st.split_tx_hz is not None:
+            return st.split_tx_hz
+        if not self.model.supports(CivCommand.BAND_MAIN):
+            return st.frequency_hz
+        tx_band = 1 if st.satellite else 0
+        return st.frequency_hz if st.selected_band == tx_band else st.other_band[0]
+
+    def _swap_band_values(self) -> None:
+        st = self.state
+        current = (st.frequency_hz, st.mode_code, st.filter_code)
+        st.frequency_hz, st.mode_code, st.filter_code = st.other_band
+        st.other_band = current
+
+    def _handle_bands(self, p: bytes) -> bytes | None:
+        """07 B0/D0/D1/D2 and 16 59/5A on dual-band models; None if not one of these."""
+        st, ok, ng = self.state, bytes([OK]), bytes([NG])
+        if p in (CivCommand.BAND_MAIN.prefix, CivCommand.BAND_SUB.prefix):
+            want = 0 if p == CivCommand.BAND_MAIN.prefix else 1
+            if want != st.selected_band:
+                self._swap_band_values()
+                st.selected_band = want
+            return ok
+        if p == CivCommand.BAND_SELECTION.prefix:
+            return p + bytes([st.selected_band])
+        if p == CivCommand.BAND_EXCHANGE.prefix:
+            self._swap_band_values()  # contents swap; the selection stays put
+            return ok
+        for command, attr in (
+            (CivCommand.SATELLITE, "satellite"),
+            (CivCommand.DUALWATCH, "dualwatch"),
+        ):
+            if p.startswith(command.prefix):
+                data = p[len(command.prefix) :]
+                if not data:
+                    return p + (b"\x01" if getattr(st, attr) else b"\x00")
+                if data in (b"\x00", b"\x01"):
+                    setattr(st, attr, data == b"\x01")
+                    return ok
+                return ng
+        return None
 
     def reported_tx(self, now: float | None = None) -> bool:
         """TX state as the radio would report it: still TX until the release delay passes."""
@@ -209,6 +266,10 @@ class IcomSimulator:
 
         if p[:1] == b"\x27" and m.scope is not None:
             return self._handle_scope(p)
+        if m.supports(CivCommand.BAND_MAIN):
+            band_reply = self._handle_bands(p)
+            if band_reply is not None:
+                return band_reply
 
         level_cmds = {c.prefix: c for c in LEVEL_COMMANDS.values() if m.supports(c)}
         meter_cmds = {c.prefix: c for c in METER_COMMANDS.values() if m.supports(c)}
@@ -284,6 +345,9 @@ class IcomSimulator:
         return ng
 
 
+# Where a model's simulator starts, when SimState's HF default makes no sense.
+_START_HZ = {"icom.ic9700": 144_200_000}
+
 _SIGNALS_HZ = (
     1_840_000,
     3_573_000,
@@ -298,6 +362,11 @@ _SIGNALS_HZ = (
     24_915_000,
     28_074_000,
     50_313_000,
+    144_174_000,
+    144_300_000,
+    145_500_000,
+    432_174_000,
+    432_200_000,
 )  # fixed test carriers so the waterfall has something to show
 
 
@@ -331,7 +400,9 @@ def scope_sweep_bytes(sim: IcomSimulator, now: float | None = None) -> bytes:
     now = time.monotonic() if now is None else now
     st = sim.state
     line = _scope_line(sim, now)
-    payloads = scope_civ.sweep_frames(line, st.scope_mode, st.frequency_hz, st.scope_span)
+    payloads = scope_civ.sweep_frames(
+        line, st.scope_mode, st.frequency_hz, st.scope_span, band=st.scope_band
+    )
     return b"".join(encode_frame(0xE0, sim.addr, p) for p in payloads)
 
 

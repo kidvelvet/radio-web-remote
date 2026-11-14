@@ -47,9 +47,41 @@ Maintainer's radio: firmware **1.42** (reported by the operator 2026-11-13). Res
 - 2026-11-13 (H7300-5): `1A 05` menu item numbers from the manual cannot be trusted on this firmware; see docs/civ-reference.md.
 - 2026-11-13 (H7300-2): one front-panel mode change (RTTY to USB) was seen by polling but no transceive frame for it arrived, most likely because it coincided with a poll. Transceive alone is not enough; keep the slow poll (ADR D4).
 
-## IC-705, IC-9700
+## IC-705
 
-Added in P4.
+Radio settings to check first (705-BM 8-16): CI-V Address A4, CI-V Transceive
+ON, CI-V USB Echo Back OFF. The IC-705 has no CI-V baud or USB link/unlink
+item. Use "IC-705 Serial Port A (CI-V)". Note the firmware version.
+
+| # | Test | Steps | Result |
+|---|------|-------|--------|
+| H705-1 | Port and probe | `radio-web-remote probe --driver icom.ic705` on Serial Port A; record USB VID:PID and serial string | Not run |
+| H705-2 | Frequency and mode | read/set on HF, 2 m, 70 cm; WFM and DV mode buttons | Not run |
+| H705-3 | Level byte order | read RF gain at max and RF power at a known setting (as H7300-8) | Not run |
+| H705-4 | PTT fail-safe | key into a dummy load at low power; kill the browser; radio unkeys | Not run |
+| H705-5 | TX frequency (split) | turn split on at the radio with TX outside your band limits; keying is refused; turn split on while keyed: unkeys | Not run |
+| H705-6 | Scope frames | capture a sweep: division numbers BCD or binary, points per division, Center/Fixed/Scroll-C/Scroll-F headers, edge 4 | Not run |
+| H705-7 | Audio | receive and mic over USB; record the codec name and sample rate | Not run |
+| H705-8 | Time-Out Timer | read 1A 05 0043 on this firmware and compare with the menu | Not run |
+
+## IC-9700
+
+Radio settings (9700-BM 8-16): CI-V Address A2, CI-V Transceive ON, CI-V USB
+Port "Unlink from [REMOTE]" and CI-V USB Baud Rate 115200 for scope data
+(9700-CIV p. 12 footnote), USB Echo Back OFF. Use USB (A) for CI-V.
+
+| # | Test | Steps | Result |
+|---|------|-------|--------|
+| H9700-1 | Port and probe | probe on USB (A); record VID:PID and serial string | Not run |
+| H9700-2 | 03 to 06 follow the selected band | select SUB at the radio, read and set frequency and mode from the browser; repeat on MAIN. **The design depends on this; the guide does not say it.** | Not run |
+| H9700-3 | 07 D2 reply | read band selection with MAIN and with SUB selected; record the reply bytes | Not run |
+| H9700-4 | Swap and select from the browser | MAIN, SUB, Swap buttons; the radio's display follows | Not run |
+| H9700-5 | TX band check | SUB selected on 70 cm, MAIN on 2 m, user limited to 70 cm: keying is refused (MAIN transmits). Satellite mode: keying uses the SUB (uplink) frequency | Not run |
+| H9700-6 | 1C 03 in split and satellite | read the TX frequency in each; compare with the radio | Not run |
+| H9700-7 | PTT fail-safe | as H7300-12, into a dummy load | Not run |
+| H9700-8 | Scope on MAIN and SUB | scope follows the selected band (27 12); 27 00 band byte; headers in each mode; points per division | Not run |
+| H9700-9 | 1296 MHz encoding | set 1296.100 MHz; the radio shows it (byte 5 carries the 1 GHz digit) | Not run |
+| H9700-10 | Audio | which band(s) USB audio carries with Dualwatch on; codec name and rate | Not run |
 
 ## iPhone, iPad
 

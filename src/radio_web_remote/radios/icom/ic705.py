@@ -12,7 +12,7 @@ from __future__ import annotations
 from radio_web_remote.protocols.civ.commands import CivCommand
 from radio_web_remote.radios.base import Meter, Mode
 from radio_web_remote.radios.icom.model import IcomModel, MeterCal, ScopeSpec, Sourced
-from radio_web_remote.sources import IC705_CIV, Source
+from radio_web_remote.sources import IC705_BASIC, IC705_CIV, Source
 
 
 def _src(page: str, note: str = "") -> Source:
@@ -102,4 +102,8 @@ IC705 = IcomModel(
     ),
     # p. 17: the 1 GHz digit is fixed at 0 and the 100 MHz digit runs 0 ~ 4.
     max_encodable_hz=499_999_999,
+    coverage_hz=((30_000, 199_999_999), (400_000_000, 470_000_000)),
+    coverage_source=Source(
+        IC705_BASIC, "11-1", "USA version receiver coverage", verified_primary=True
+    ),
 )

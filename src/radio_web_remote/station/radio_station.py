@@ -74,6 +74,9 @@ class RadioState:
     modes: tuple[str, ...] = ()
     scope_modes: tuple[str, ...] = ()
     scope_edges: int = 0
+    coverage_hz: tuple[tuple[int, int], ...] = ()  # for band shortcuts only
+    band: str | None = None  # "main" / "sub" on dual-band radios
+    satellite: bool | None = None  # satellite mode (TX on SUB), where the radio reports it
     data_mode: bool | None = None
     levels: dict[str, int] = field(default_factory=dict)  # "af" -> 0..255
     meters: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -94,6 +97,7 @@ class RadioState:
         d["features"] = list(self.features)
         d["modes"] = list(self.modes)
         d["scope_modes"] = list(self.scope_modes)
+        d["coverage_hz"] = [list(r) for r in self.coverage_hz]
         return d
 
 
@@ -268,6 +272,7 @@ class RadioStation:
             modes=tuple(m.value for m in driver.modes),
             scope_modes=driver.scope_modes(),
             scope_edges=driver.scope_edges(),
+            coverage_hz=driver.coverage_hz(),
         )
         if self._scope_wanted and Feature.SCOPE in driver.features:
             await driver.set_scope_output(True)  # re-apply after a reconnect
@@ -307,6 +312,10 @@ class RadioStation:
         ]
         if Feature.DATA_MODE in driver.features:
             items.append("data_mode")
+        if Feature.MAIN_SUB in driver.features:
+            items.append("band")
+        if Feature.SATELLITE in driver.features:
+            items.append("satellite")
         if Feature.SCOPE in driver.features:
             items += [f"scope:{name}" for name in driver.scope_settings_supported()]
         return items
@@ -325,6 +334,18 @@ class RadioStation:
             value = await driver.get_scope_setting(name)
             if self._unchanged_since(item, mark) and self.state.scope.get(name) != value:
                 self._update(scope={**self.state.scope, name: value})
+            return
+        if item == "band":
+            mark = self._writes.get("band", 0)
+            band = await driver.get_band()
+            if self._unchanged_since("band", mark) and band != self.state.band:
+                self._update(band=band)  # changed at the radio; the next poll reads its frequency
+            return
+        if item == "satellite":
+            sat = await driver.get_satellite()
+            if sat != self.state.satellite:
+                self._update(satellite=sat)
+                await self.tx.recheck_frequency()  # the transmit band just changed
             return
         if item == "data_mode":
             mark = self._writes.get("data_mode", 0)
@@ -492,6 +513,33 @@ class RadioStation:
         await driver.set_scope_setting(name, value)
         self._bump(key)
         self._update(scope={**self.state.scope, name: value})
+
+    def _require_band_change(self, op: Operator) -> RadioDriver:
+        driver = self._require_control(op)
+        if Feature.MAIN_SUB not in driver.features:
+            raise ControlDenied(f"{driver.model_name} has no MAIN/SUB bands")
+        if self.tx.status.transmitting:
+            raise ControlDenied("not while transmitting")
+        return driver
+
+    async def _reread_band(self, driver: RadioDriver) -> None:
+        """After a band change: what the controls now act on."""
+        self._bump("band", "frequency", "mode")
+        band = await driver.get_band()
+        hz = await driver.get_frequency()
+        mode = await driver.get_mode()
+        self._bump("band", "frequency", "mode")
+        self._update(band=band, frequency_hz=hz, mode=mode.mode.value, filter=mode.filter)
+
+    async def set_band(self, op: Operator, band: str) -> None:
+        driver = self._require_band_change(op)
+        await driver.set_band(band)
+        await self._reread_band(driver)
+
+    async def swap_bands(self, op: Operator) -> None:
+        driver = self._require_band_change(op)
+        await driver.swap_bands()
+        await self._reread_band(driver)
 
     async def set_data_mode(self, op: Operator, on: bool) -> None:
         driver = self._require_control(op)

@@ -13,6 +13,8 @@ Client -> server (JSON):
   {"type": "set_data_mode", "on": true | false}
   {"type": "scope", "on": true | false}   subscribe to scope lines (binary frames)
   {"type": "audio", "mode": "remote" | "host" | "monitor" | null}
+  {"type": "set_band", "band": "main" | "sub"}   (dual-band radios)
+  {"type": "swap_bands"}
   binary 0x03 frames: transmit audio (audio/pcm.py), used only from the TX holder
   {"type": "set_scope", "setting": "mode"|"span"|"edge"|"hold"|"ref"|"speed", "value": ...}
 
@@ -366,6 +368,13 @@ class Hub:
                 if not on:
                     conn.scope_lines.clear()
                 await self._update_scope_demand(conn.radio_id)
+            elif kind == "set_band":
+                band = msg.get("band")
+                if band not in ("main", "sub"):
+                    raise ValueError("band must be main or sub")
+                await station.set_band(op, str(band))
+            elif kind == "swap_bands":
+                await station.swap_bands(op)
             elif kind == "set_scope":
                 name = msg.get("setting")
                 value = msg.get("value")

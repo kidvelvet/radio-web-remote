@@ -29,6 +29,12 @@
 
   <main class="grid">
     <section class="panel span2" aria-label="Frequency">
+      <div class="row" id="bandsel" data-feature="main_sub" role="group" aria-label="Band the controls act on">
+        <button type="button" data-band="main" aria-pressed="false">MAIN</button>
+        <button type="button" data-band="sub" aria-pressed="false">SUB</button>
+        <button type="button" id="band-swap" aria-label="Swap MAIN and SUB">Swap</button>
+        <span class="muted small hidden" id="satnote">Satellite mode: transmits on SUB (uplink).</span>
+      </div>
       <div class="freq" id="freq" tabindex="0" role="slider" aria-label="Frequency, drag left or right to tune"
            aria-valuetext="">
         <span id="freqtext">--.---.---</span><span class="unit">MHz</span>

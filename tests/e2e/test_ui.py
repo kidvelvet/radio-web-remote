@@ -240,6 +240,42 @@ def test_ic705_page_shows_its_own_modes_and_scope_options(page: Page, server):
     page.select_option("#sc-mode", "center")
 
 
+def _band_names(page: Page) -> list[str]:
+    return page.eval_on_selector_all("#bands button", "els => els.map(e => e.textContent)")
+
+
+def test_ic9700_main_sub_and_band_shortcuts(page: Page, server):
+    login(page, server)
+    expect(page.locator("#bandsel")).to_be_hidden()  # IC-7300: one band
+    assert "20m" in _band_names(page) and "2m" not in _band_names(page)
+    page.goto("/?radio=sim-ic9700")
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(page.locator("#bandsel")).to_be_visible(timeout=10_000)
+    assert _band_names(page) == ["2m", "70cm", "23cm"]  # coverage, Basic Manual 11-1
+    expect(page.locator("#satnote")).to_be_hidden()
+    # The simulated radio is shared by every browser in the run: work from its state.
+    freq = page.locator("#freqtext")
+    page.click("[data-band=main]")
+    expect(page.locator("[data-band=main]")).to_have_attribute("aria-pressed", "true")
+    expect(freq).not_to_have_text("--.---.---")
+    main_text = freq.inner_text()
+    page.click("[data-band=sub]")
+    expect(page.locator("[data-band=sub]")).to_have_attribute("aria-pressed", "true")
+    expect(freq).not_to_have_text(main_text, timeout=5_000)
+    sub_text = freq.inner_text()
+    page.click("#band-swap")  # contents swap; SUB stays selected
+    expect(freq).to_have_text(main_text, timeout=5_000)
+    expect(page.locator("[data-band=sub]")).to_have_attribute("aria-pressed", "true")
+    page.click("#band-swap")
+    expect(freq).to_have_text(sub_text, timeout=5_000)
+    page.click("#bands button:has-text('23cm')")
+    expect(freq).to_have_text("1296.100.000", timeout=5_000)
+    page.click("#bands button:has-text('70cm')")
+    expect(freq).to_have_text("432.100.000", timeout=5_000)
+    page.click("[data-band=main]")
+    expect(freq).to_have_text(main_text, timeout=5_000)
+
+
 def _audio_started(page: Page):
     try:
         expect(page.locator("#au-start")).to_have_text("Stop audio", timeout=10_000)

@@ -45,6 +45,8 @@ class Feature(Enum):
     METER_ALC = "meter_alc"
     SCOPE = "scope"
     TX_FREQUENCY = "tx_frequency"  # can read the frequency it will transmit on
+    MAIN_SUB = "main_sub"  # two receive bands; controls act on the selected one
+    SATELLITE = "satellite"  # can report satellite mode (TX on SUB)
 
 
 class Level(Enum):
@@ -187,8 +189,25 @@ class RadioDriver(ABC):
     def scope_modes(self) -> tuple[str, ...]:
         return ()
 
+    async def get_band(self) -> str:
+        """Selected band, "main" or "sub" (dual-band radios)."""
+        raise Unsupported(f"{self.model_name} has no MAIN/SUB bands")
+
+    async def set_band(self, band: str) -> None:
+        raise Unsupported(f"{self.model_name} has no MAIN/SUB bands")
+
+    async def swap_bands(self) -> None:
+        raise Unsupported(f"{self.model_name} has no MAIN/SUB bands")
+
+    async def get_satellite(self) -> bool:
+        raise Unsupported(f"{self.model_name} has no documented satellite mode")
+
     def scope_edges(self) -> int:
         return 0
+
+    def coverage_hz(self) -> tuple[tuple[int, int], ...]:
+        """Documented receive coverage (one version), for UI shortcuts only; () if unknown."""
+        return ()
 
     async def set_scope_output(self, on: bool) -> None:
         """Turn the scope and its data output on or off; lines arrive as StateEvent("scope")."""
