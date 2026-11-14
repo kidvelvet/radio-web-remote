@@ -413,3 +413,13 @@ async def test_retune_waits_for_a_press_and_is_refused_if_it_keyed(rig):
     async with rig.tx.retune_guard(ALICE, 7_100_000):  # the holder may retune
         pass
     await rig.tx.ptt_up(ALICE)
+
+
+async def test_tx_off_retry_is_not_starved_by_retunes(rig):
+    """Review B4-1: retunes hold the key lock; the retry of an unconfirmed TX off
+    must still run."""
+    rig.tx._unkey_pending = True
+    rig.tx._last_unkey_try = -1e9
+    async with rig.tx.retune_guard(ALICE, 14_100_000):
+        await rig.tx._check()
+    assert not rig.tx._unkey_pending  # retried and confirmed

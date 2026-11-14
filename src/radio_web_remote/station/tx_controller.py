@@ -227,8 +227,14 @@ class TxController:
                 log.exception("TX status listener failed")
 
     # -- client events -----------------------------------------------------
-    async def ptt_down(self, op: Operator) -> None:
-        """Key for this operator, or raise TxDenied."""
+    @property
+    def press_may_wait(self) -> bool:
+        """A press now would wait (for a retune or a TX off) before keying."""
+        return self._key_lock.locked() or bool(self._unkey_tasks)
+
+    async def ptt_down(self, op: Operator, on_commit: Callable[[], None] | None = None) -> None:
+        """Key for this operator, or raise TxDenied. on_commit runs once the press
+        is committed (the holder is set): until then cancelling it is safe."""
         if not op.may_transmit:
             raise TxDenied(DenyReason.NOT_PERMITTED, "role or callsign does not permit transmit")
         if op.session_id in self._must_release:
@@ -271,6 +277,8 @@ class TxController:
             self._started_mono = self._last_heartbeat = now
             self._started_wall = time.time()
             self._started_hz = hz
+            if on_commit is not None:
+                on_commit()
             self._notify()
             if self._closed:  # close() ran while this press waited above
                 self._holder = None
@@ -415,9 +423,15 @@ class TxController:
 
     async def _unkey(self) -> None:
         self._last_unkey_try = self._clock()
+        generation = self._generation
         try:
             confirmed = await self.driver.unkey()
         except Exception as exc:  # RadioError, or anything unexpected: keep retrying
+            if self._keyed and self._generation != generation:
+                # A newer key was confirmed while this TX off ran: the radio is
+                # on the air because someone pressed, not because this failed.
+                log.warning("TX off on %s overtaken by a confirmed key: %s", self.radio_id, exc)
+                return
             if self._unkey_failures == 0:
                 log.critical("TX off NOT confirmed on %s: %s. Retrying.", self.radio_id, exc)
                 self._unconfirmed_since = self._clock()
@@ -464,7 +478,6 @@ class TxController:
             self._unkey_pending
             and now - self._last_unkey_try >= UNKEY_RETRY_S
             and not self._unkey_tasks  # one at a time; a new key waits for it
-            and not self._key_lock.locked()  # a press in progress: its key supersedes this
         ):
             await asyncio.shield(self._spawn_unkey())
 

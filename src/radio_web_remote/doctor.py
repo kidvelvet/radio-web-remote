@@ -127,6 +127,7 @@ def check_config(
 def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
     t = "Accounts and certificates"
     from radio_web_remote.security.tls import (
+        _pair_problem,
         needs_new_server_cert,
         tls_dir,
         uncovered_by_ca,
@@ -177,7 +178,23 @@ def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
         report.add("warn", t, f"server certificate will be re-issued at start: {reason}")
     else:
         report.add("ok", t, f"server certificate covers {sans.describe()}")
-    if (d / "ca.crt").exists():
+    ca = [(d / n).exists() for n in ("ca.crt", "ca.key")]
+    ca_problem = (
+        _pair_problem(d / "ca.crt", d / "ca.key")
+        if all(ca)
+        else "file missing"
+        if any(ca)
+        else None
+    )
+    if ca_problem:  # serve refuses to start with this
+        report.add(
+            "fail",
+            t,
+            f"local CA: {ca_problem}",
+            "Restore ca.crt and ca.key from a backup, or run `radio-web-remote cert reset` "
+            "and reinstall the CA on each device from /setup.",
+        )
+    elif all(ca):
         missing = uncovered_by_ca(d / "ca.crt", sans)
         if missing:
             report.add(
@@ -477,18 +494,21 @@ async def run(
     devices: list[AudioDevice] | None = None,
     transport_factory: TransportFactory = _serial_factory,
     listen_audio: Callable[[int], float | None] | None = listen_peak,
+    config_dir: Path | None = None,
 ) -> Report:
+    """config_dir: the --data-dir the user named, if any; config.yaml is looked
+    up exactly as `serve` does."""
     from pydantic import ValidationError
 
     from radio_web_remote.config import find_config_file, load_config
 
     report = Report()
     check_host(report)
-    source = find_config_file(cfg_path, data_dir)
+    source = find_config_file(cfg_path, config_dir)
     cfg: Config | None = None
     error = None
     try:
-        cfg = load_config(cfg_path, data_dir)
+        cfg = load_config(cfg_path, config_dir)
     except (ValidationError, ValueError, OSError) as exc:
         error = str(exc)
     check_config(report, cfg, source, error)
@@ -524,8 +544,10 @@ async def run(
     return report
 
 
-def main(cfg_path: str | None, data_dir: Path, skip_radio: bool) -> int:
-    report = asyncio.run(run(cfg_path, data_dir, skip_radio=skip_radio))
+def main(
+    cfg_path: str | None, data_dir: Path, skip_radio: bool, config_dir: Path | None = None
+) -> int:
+    report = asyncio.run(run(cfg_path, data_dir, skip_radio=skip_radio, config_dir=config_dir))
     print(report.render())
     return 1 if report.failed else 0
 

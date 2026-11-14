@@ -201,3 +201,38 @@ def test_parse_interface_addresses():
     } <= mac
     lin = tls.parse_interface_addresses(LINUX_IP)
     assert {ipaddress.ip_address(a) for a in ("127.0.0.1", "10.0.1.20", "fd00::20")} <= lin
+
+
+def test_foreign_server_certificate_is_reissued(tmp_path):
+    """Review C4-3: a certificate with no names (not one of ours) is replaced."""
+    import datetime as dt
+
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509.oid import NameOID
+
+    cfg = Config()
+    tls.ensure_certificates(cfg, tmp_path)
+    d = tls.tls_dir(tmp_path)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "foreign")])
+    now = dt.datetime.now(dt.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(now)
+        .not_valid_after(now + dt.timedelta(days=300))
+        .sign(key, hashes.SHA256())
+    )
+    (d / "server.crt").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (d / "server.key").write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    _files, changed = tls.ensure_certificates(cfg, tmp_path)
+    assert changed and "no names" in changed

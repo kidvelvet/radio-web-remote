@@ -84,9 +84,12 @@ def server(tmp_path_factory):
         stdin=pw + "\n",
     )
     _cli("user", *common, "limits", "twenty", "--bands", "14000000-14350000")
+    # To a file, not a pipe: nothing reads a pipe while the tests run, and a
+    # full one (64 KB) blocks the server's event loop on its next log line.
+    log = open(d / "server.log", "w")  # noqa: SIM115  (open for the whole session)
     proc = subprocess.Popen(
         [sys.executable, "-m", "radio_web_remote", "serve", "--simulate", *common],
-        stdout=subprocess.PIPE,
+        stdout=log,
         stderr=subprocess.STDOUT,
         text=True,
     )
@@ -95,7 +98,7 @@ def server(tmp_path_factory):
         with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), 0.2):
             break
         if proc.poll() is not None:
-            raise RuntimeError(proc.stdout.read())
+            raise RuntimeError((d / "server.log").read_text())
         time.sleep(0.1)
     else:
         proc.kill()
@@ -106,6 +109,7 @@ def server(tmp_path_factory):
         proc.wait(10)
     except subprocess.TimeoutExpired:
         proc.kill()
+    log.close()
 
 
 @pytest.fixture

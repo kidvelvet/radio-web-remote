@@ -275,7 +275,7 @@ def _cmd_cert(args: argparse.Namespace) -> int:
 def _cmd_doctor(args: argparse.Namespace) -> int:
     from radio_web_remote import doctor
 
-    return doctor.main(args.config, _data_dir(args), args.skip_radio)
+    return doctor.main(args.config, _data_dir(args), args.skip_radio, _data_dir_arg(args))
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -408,6 +408,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.func is _cmd_serve:  # a service log needs to show where it came from
             traceback.print_exc()
         where = getattr(exc, "filename", None)
+        if isinstance(exc, sqlite3.Error) and hasattr(args, "data_dir"):
+            from radio_web_remote.server import users_db
+
+            where = users_db(_data_dir(args))  # sqlite names no file
         print(
             f"error: {exc}" + (f" ({where})" if where and str(where) not in str(exc) else ""),
             file=sys.stderr,

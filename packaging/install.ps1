@@ -85,6 +85,7 @@ param([switch]$Service, [switch]$Uninstall)
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     $wasRunning = $task -and $task.State -eq "Running"
     if ($wasRunning) { Stop-ScheduledTask -TaskName $TaskName }
+    $installed = $false
     try {
         # A venv whose Python was uninstalled, or made half-way, has no working pip: make it again.
         $venvPython = Join-Path $Scripts "python.exe"
@@ -101,8 +102,10 @@ param([switch]$Service, [switch]$Uninstall)
         & $venvPython -m pip install --quiet --upgrade pip
         & $venvPython -m pip install --quiet --upgrade $Source
         if ($LASTEXITCODE -ne 0) { throw "pip could not install $Source" }
+        $installed = $true
     } finally {
-        if ($wasRunning -and -not $Service) {
+        # With -Service the task is registered and started below, unless this failed.
+        if ($wasRunning -and (-not $Service -or -not $installed)) {
             Start-ScheduledTask -TaskName $TaskName
             Write-Host "Started the scheduled task again."
         }

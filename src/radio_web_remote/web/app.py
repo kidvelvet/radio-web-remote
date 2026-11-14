@@ -163,7 +163,9 @@ def create_app(
         flush_caps(minute)
         cap = caps.setdefault(event, {"minute": minute, "count": 0, "suppressed": 0})
         if cap["count"] >= AUDIT_CAP_PER_MIN:
-            cap["suppressed"] += 1
+            cap["suppressed"] += 1 + int(
+                fields.get("suppressed", 0)
+            )  # with a throttled key's own count
             return
         cap["count"] += 1
         audit_event(event, **fields)
@@ -199,6 +201,7 @@ def create_app(
             yield
         finally:
             flusher.cancel()
+            flush_caps(int(time.monotonic() // 60) + 1)  # the last minute's counts
             await ctx.hub.close()
             if start_stations:
                 for st in stations.values():

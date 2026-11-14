@@ -377,3 +377,72 @@ regressions or gaps left by round 2 (A3-1, A3-2, B3-1, C3-1, C3-4, D3-1).
 devices more than once; sharing one is a larger change, and only matters with
 two radios and host audio. E3-5 (b), doctor resolves a relative `cert_file`
 against its own working folder, while the service uses the data folder.
+
+### Round 4 (2026-11-14): 212 lines changed of 9,324 = 2.3%: continue
+
+Five fresh reviewers. 23 findings, all fixed; one has a part left as a
+documented limit (B4-3). Five came from round-3 changes (B4-1, B4-2, D4-1,
+E4-1, E4-3). (T) = regression test added, failing before the fix.
+
+**PTT and transmit safety**
+
+- D4-1 (T): the server did not say which press a refusal answered, so a late
+  refusal of an earlier press cleared the page's PTT after a newer press had
+  keyed; the radio stayed keyed with the page showing receive, and in toggle
+  mode the next tap keyed again (reproduced). Each press now carries a number
+  that the refusal echoes, and the page ignores refusals of older presses.
+- B4-1 (T): round 3 made the TX-off retry wait while the key lock was held,
+  and every retune now holds it, so a VFO drag could starve the retry of an
+  unconfirmed TX off. The retry no longer looks at the lock; a TX off that
+  fails after a newer key was confirmed no longer raises the alarm.
+- B4-2 (T): a press waiting behind another user's retune (or a TX off) still
+  waited inline, so its release was read only after the key (the C3-1 case
+  by another route). Such a press now waits as a task too, cancellable until
+  the controller commits it.
+- A4-1 (T): one lost read-back answer used up the whole 0.5 s window. Each
+  read-back now waits one resend interval, so a lost answer is retried.
+- A4-2 (T): after a stuck command, unkey now fails that command and takes
+  the bus next (ahead of its retry), instead of waiting out its full
+  timeout; the read-back then has the whole window.
+
+**Station and audio**
+
+- B4-4: a scope on/off the radio refused was never retried until viewers
+  changed; it is now retried every 5 s while it differs from what viewers
+  want.
+- B4-3: a device connected after start is not found while other audio runs
+  (PortAudio reloads its list only with every stream closed). The status now
+  says a restart finds it; a coordinated reload is left for later.
+- B4-5: an error without text shows its type.
+- A4-3: the simulator answers NG to a wrong-length span instead of stopping.
+
+**Web server and security**
+
+- C4-1: a user database with damaged data pages now also stops the start as
+  a config error (the check happened after the guarded open).
+- C4-2 (T): values of the wrong type (a list as the message type, a huge
+  number as the reference level) closed the connection with a traceback; they
+  are now refused as bad requests.
+- C4-3 (T): a server certificate with no names (not ours), or unreadable, is
+  reissued instead of stopping the start.
+- C4-4: a throttled address's own count is kept when the global cap
+  suppresses it, and the last minute's counts are written at shutdown.
+- Ending a session (logout, disable) now also settles a waiting press first.
+
+**Setup and tooling**
+
+- E4-1 (T): round 3's config order made doctor read the data folder's
+  config.yaml while `serve` read ./config.yaml; doctor now looks up config
+  exactly as `serve` does.
+- E4-2 (T): doctor reports a broken or half-missing local CA (which stops
+  `serve`), instead of passing or crashing; `serve` no longer silently makes
+  a new CA when only one of the two files is there.
+- E4-3: with `-Service`, a failed upgrade left the task stopped.
+- E4-4: the Docker instructions create `data/` owned by the container user
+  first, and say the radio must be connected.
+- E4-5: database errors name users.db for every command.
+- E4-6: bootstrap.ps1 stops on a failed step instead of printing "Ready".
+
+**Tests**: the browser-test server's log went to a pipe nobody read; at
+64 KB (reached by the end of a CI run after round 3 added tests) the server
+blocked and the last WebKit test timed out in CI. It now logs to a file.

@@ -320,7 +320,10 @@ def needs_new_server_cert(cert_file: Path, sans: SanSet) -> str | None:
     cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
     if cert.not_valid_after_utc - _now() < dt.timedelta(days=RENEW_WITHIN_DAYS):
         return f"expires {cert.not_valid_after_utc:%Y-%m-%d}"
-    have = cert_sans(cert_file)
+    try:
+        have = cert_sans(cert_file)
+    except x509.ExtensionNotFound:
+        return "server certificate has no names"  # not one of ours
     missing = (sans.dns - have.dns, sans.ips - have.ips)
     if missing[0] or missing[1]:
         names = sorted(missing[0]) + sorted(str(i) for i in missing[1])
@@ -338,10 +341,11 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
     d = tls_dir(data_dir)
     changed: list[str] = []
     sans = wanted_sans(cfg)
-    if not (d / "ca.crt").exists() or not (d / "ca.key").exists():
+    have = [(d / n).exists() for n in ("ca.crt", "ca.key")]
+    if not any(have):
         create_ca(d, cfg.site.club_name, sans)
         changed.append("created local CA")
-    elif problem := _pair_problem(d / "ca.crt", d / "ca.key"):
+    elif problem := "file missing" if not all(have) else _pair_problem(d / "ca.crt", d / "ca.key"):
         # Not repaired silently: a new CA means every device must install it again.
         raise ConfigError(f"local CA {problem}; run 'radio-web-remote cert reset'")
     outside = uncovered_by_ca(d / "ca.crt", sans)
@@ -361,7 +365,9 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
         # Keep names the old certificate had, so a briefly missing interface
         # does not drop an address clients already use.
         if (d / "server.crt").exists() and "created local CA" not in changed:
-            with contextlib.suppress(ValueError):  # unreadable: nothing to keep
+            with contextlib.suppress(
+                ValueError, OSError, x509.ExtensionNotFound
+            ):  # nothing to keep
                 old = cert_sans(d / "server.crt")
                 sans = SanSet(sans.dns | old.dns, sans.ips | old.ips)
         create_server_cert(d, sans, cfg.server.tls.server_cert_days)

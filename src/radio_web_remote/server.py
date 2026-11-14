@@ -68,11 +68,12 @@ def _real_audio(
 def build_runtime(cfg: Config, data_dir: Path, simulate: bool = False) -> Runtime:
     try:
         users = UserStore(users_db(data_dir))
+        admins = users.count_admins()  # reads data pages too: damage shows here
     except sqlite3.OperationalError:
         raise  # locked or busy: may pass, so a restart is right
     except sqlite3.DatabaseError as exc:  # not a database, corrupt: a restart cannot fix it
         raise ConfigError(f"user database {users_db(data_dir)}: {exc}") from exc
-    if users.count_admins() == 0:
+    if admins == 0:
         raise NoAdmin("No admin account yet. Run: radio-web-remote init")
     audit = AuditLog(data_dir / "logs" / "audit.log")
     tls, changed = ensure_certificates(cfg, data_dir)

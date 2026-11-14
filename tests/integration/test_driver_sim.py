@@ -385,3 +385,51 @@ async def test_unkey_confirms_after_a_stuck_poll(rig):
     assert await driver.unkey() is True
     assert not sim.state.transmitting
     await poll
+
+
+# -- review round 4 ------------------------------------------------------------
+
+
+async def test_unkey_survives_a_lost_read_back_reply(rig):
+    """Review A4-1: one lost read-back answer must not use up the whole window."""
+    driver, sim, _ = rig
+    driver.timeout = 0.5
+    original = sim._handle
+    lost = {"left": 1}
+
+    def lose_one_read(frame, now):
+        if lost["left"] and frame.payload == b"\x1c\x00":
+            lost["left"] -= 1
+            return None
+        return original(frame, now)
+
+    await driver.key()
+    sim._handle = lose_one_read
+    assert await driver.unkey() is True
+    assert not lost["left"]
+
+
+async def test_unkey_after_a_stuck_poll_gets_several_read_backs(rig):
+    """Review A4-2: the stuck command gives up the bus at once, so a lost
+    read-back answer after it is retried within the window."""
+    driver, sim, _ = rig
+    driver.timeout = 0.5
+    original = sim._handle
+    lost = {"poll": 1, "read": 1}
+
+    def lose(frame, now):
+        if lost["poll"] and frame.payload == b"\x03":
+            lost["poll"] -= 1
+            return None
+        if lost["read"] and frame.payload == b"\x1c\x00":
+            lost["read"] -= 1
+            return None
+        return original(frame, now)
+
+    await driver.key()
+    sim._handle = lose
+    poll = asyncio.create_task(driver.get_frequency())
+    await asyncio.sleep(0.01)
+    assert await driver.unkey() is True
+    assert not sim.state.transmitting
+    assert await poll  # the overtaken poll is retried and answered

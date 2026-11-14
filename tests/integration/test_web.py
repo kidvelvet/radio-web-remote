@@ -773,3 +773,53 @@ def test_release_during_a_press_waiting_for_controls_never_keys(env, monkeypatch
         ws.send_json({"type": "ptt", "down": True})
         recv_until(ws, keyed)
         ws.send_json({"type": "ptt", "down": False})
+
+
+def test_release_during_a_press_waiting_for_another_users_retune(env, monkeypatch):
+    """Review B4-2: a press waiting for the key lock (another user's slow retune)
+    must not block reading this connection's release."""
+    import asyncio
+
+    station, sim = env["station"], env["sim"]
+
+    async def slow_level(op, level, value):
+        async with station.tx._key_lock:  # stands in for a retune that times out
+            await asyncio.sleep(0.6)
+
+    monkeypatch.setattr(station, "set_level", slow_level)
+    c = env["client"]
+    bob, alice = login_as(c, "bob"), login_as(c, "alice")
+    with wsc(c, "/ws", cookies=bob) as other, wsc(c, "/ws", cookies=alice) as ws:
+        other.receive_json()
+        ws.receive_json()
+        before = list(sim.tx_history)
+        other.send_json({"type": "set_level", "level": "af", "value": 9})
+        time.sleep(0.1)  # bob's control holds the key lock
+        ws.send_json({"type": "ptt", "down": True, "press": 1})
+        ws.send_json({"type": "ptt", "down": False})
+        ws.send_json({"type": "heartbeat"})
+        time.sleep(1.0)
+        assert True not in sim.tx_history[len(before) :]
+
+
+def test_refusal_names_its_press_and_bad_types_are_refused(env):
+    """Review D4-1: a refusal carries the press it answers. Review C4-2: values
+    of the wrong type are refused without closing the connection."""
+    c = env["client"]
+    login(c, "lee")
+    with wsc(c, "/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "ptt", "down": True, "press": 7})
+        err = recv_until(ws, lambda m: m["type"] == "error")
+        assert err["code"] == "not_permitted" and err["press"] == 7
+    login(c, "alice")
+    with wsc(c, "/ws") as ws:
+        ws.receive_json()
+        for bad in (
+            {"type": []},
+            {"type": "set_scope", "setting": [], "value": 1},
+            {"type": "set_scope", "setting": "ref", "value": 10**400},
+        ):
+            ws.send_json(bad)
+            assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"
+        ws.send_json({"type": "heartbeat"})  # still open

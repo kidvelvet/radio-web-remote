@@ -151,3 +151,31 @@ def test_damaged_user_database_is_a_finding(tmp_path):
     report = doctor.Report()
     doctor.check_data(report, Config(), tmp_path)
     assert report.failed and "user database" in report.findings[-1].text
+
+
+def test_doctor_reads_the_config_serve_reads(tmp_path, monkeypatch):
+    """Review E4-1: without --data-dir, ./config.yaml wins for doctor too."""
+    import asyncio
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("RADIO_WEB_REMOTE_CONFIG", raising=False)
+    (tmp_path / "config.yaml").write_text("server:\n  https_port: 9001\n")
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "config.yaml").write_text("server:\n  https_port: 9002\n")
+    report = asyncio.run(doctor.run(None, data, skip_radio=True, ports=[], devices=[]))
+    text = report.render()
+    assert "9001" in text and "9002" not in text
+
+
+def test_broken_local_ca_is_a_doctor_failure(tmp_path):
+    """Review E4-2: what makes serve refuse to start fails doctor too."""
+    from radio_web_remote.security import tls
+    from radio_web_remote.security.users import UserStore
+
+    UserStore(tmp_path / "users.db")
+    tls.ensure_certificates(Config(), tmp_path)
+    (tls.tls_dir(tmp_path) / "ca.key").unlink()
+    report = doctor.Report()
+    doctor.check_data(report, Config(), tmp_path)
+    assert any(f.level == "fail" and "local CA" in f.text for f in report.findings)

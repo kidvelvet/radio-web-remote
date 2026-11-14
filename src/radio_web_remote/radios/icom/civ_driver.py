@@ -590,9 +590,22 @@ class IcomCivDriver(RadioDriver):
             # The command in flight is stuck. Do not wait for it: send TX off now,
             # and do not let its FB complete the stuck command as if acknowledged.
             log.warning("bus busy for %.0f ms; sending TX off anyway", UNKEY_BUS_WAIT_S * 1000)
-            self._pending = None
-            with contextlib.suppress(OSError):
-                await self.transport.send_urgent(self._frame(payload))
+            # Fail the stuck command now and queue first for the bus (queueing is
+            # synchronous), ahead of its retry: the read-back below then gets the
+            # bus at once instead of after the stuck command's full timeout.
+            stuck, self._pending = self._pending, None
+            if stuck is not None and not stuck.future.done():
+                stuck.future.set_exception(RadioTimeout(f"{self.model.name}: overtaken by TX off"))
+            try:
+                async with self._bus.acquire(Priority.URGENT, wait_s=UNKEY_BUS_WAIT_S):
+                    with contextlib.suppress(RadioError):
+                        await self._exchange(
+                            CivCommand.TX_STATE, payload, False, wait_s=budget(UNKEY_RESEND_S)
+                        )
+            except TimeoutError:  # still stuck: write TX off past it
+                self._pending = None
+                with contextlib.suppress(OSError):
+                    await self.transport.send_urgent(self._frame(payload))
         if not verify:
             return True
         last_send = loop.time()
@@ -603,7 +616,10 @@ class IcomCivDriver(RadioDriver):
             with contextlib.suppress(RadioError, ReplyError):
                 async with self._bus.acquire(Priority.URGENT):
                     reply = await self._exchange(
-                        CivCommand.TX_STATE, cmd.read_tx_state(), True, wait_s=budget(self.timeout)
+                        CivCommand.TX_STATE,
+                        cmd.read_tx_state(),
+                        True,
+                        wait_s=budget(UNKEY_RESEND_S),
                     )
                 if not cmd.parse_tx_state(reply.payload):
                     return True

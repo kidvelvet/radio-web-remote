@@ -145,6 +145,7 @@ class _Conn:
         self.control = _Controls()
         # A PTT press waiting for earlier controls (see Hub._press).
         self.press: asyncio.Task[None] | None = None
+        self.press_msg: dict[str, Any] = {}
         self.press_waiting = False
 
     def push_state(self, state: dict[str, Any]) -> None:
@@ -242,6 +243,7 @@ class Hub:
     async def end_session(self, public_id: str, reason: StopReason) -> None:
         """Logout or disable: unkey and close every connection of that session."""
         for c in [c for c in self._conns.values() if c.public_id == public_id]:
+            await self._settle_press(c)
             await self.stations[c.radio_id].tx.client_gone(c.op.session_id, reason)
             with contextlib.suppress(Exception):
                 await c.ws.close(code=4001)
@@ -416,6 +418,7 @@ class Hub:
                 log.warning("session check failed for %s", conn.op.session_id, exc_info=True)
                 continue
             if session is None:
+                await self._settle_press(conn)
                 await self.stations[conn.radio_id].tx.client_gone(
                     conn.op.session_id, StopReason.LOGGED_OUT
                 )
@@ -447,14 +450,21 @@ class Hub:
                 conn.push({"type": "error", "code": "bad_json", "message": "invalid JSON"})
                 continue
             kind = msg.get("type")
+            if not isinstance(kind, str):
+                conn.push({"type": "error", "code": "bad_request", "message": "type must be text"})
+                continue
             if kind in INLINE_MESSAGES:
                 if kind == "ptt" and msg.get("down") is True:
                     if conn.press is not None and not conn.press.done():
-                        continue  # a repeat while the first press waits
-                    if not conn.control.idle.is_set():
+                        # A repeat while the first press waits: its refusal answers this one.
+                        conn.press_msg["press"] = msg.get("press")
+                        continue
+                    if not conn.control.idle.is_set() or station.tx.press_may_wait:
                         # A key waits for controls sent before it (a power or band
-                        # change), off this loop: a release must still be read.
+                        # change), a retune or a TX off, off this loop: a release
+                        # must still be read meanwhile.
                         conn.press_waiting = True
+                        conn.press_msg = msg
                         conn.press = asyncio.create_task(self._press(conn, station, msg))
                         conn.press.add_done_callback(functools.partial(self._helper_done, conn))
                         continue
@@ -467,8 +477,11 @@ class Hub:
     async def _press(self, conn: _Conn, station: RadioStation, msg: dict[str, Any]) -> None:
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(conn.control.idle.wait(), PTT_WAITS_FOR_CONTROLS_S)
-        conn.press_waiting = False  # from here on it keys: never cancelled
-        await self._handle(conn, station, msg)
+
+        def committed() -> None:  # from here on it keys: never cancelled
+            conn.press_waiting = False
+
+        await self._handle(conn, station, msg, on_commit=committed)
 
     async def _settle_press(self, conn: _Conn) -> None:
         """Before a release: drop a press still waiting, or let one that is keying
@@ -489,7 +502,13 @@ class Hub:
             return
         station.audio.tx_from_browser(conn.op.session_id, frame_pcm)
 
-    async def _handle(self, conn: _Conn, station: RadioStation, msg: dict[str, Any]) -> None:
+    async def _handle(
+        self,
+        conn: _Conn,
+        station: RadioStation,
+        msg: dict[str, Any],
+        on_commit: Callable[[], None] | None = None,
+    ) -> None:
         kind = msg.get("type")
         op = conn.op
         tx = station.tx
@@ -500,7 +519,7 @@ class Hub:
                 self._client_diag(conn, msg)
             elif kind == "ptt":
                 if msg.get("down") is True:
-                    await tx.ptt_down(op)
+                    await tx.ptt_down(op, on_commit)
                 else:
                     await tx.ptt_up(op)
             elif kind == "audio":
@@ -576,12 +595,17 @@ class Hub:
             else:
                 raise ValueError(f"unknown message type {kind!r}")
         except TxDenied as exc:
-            conn.push({"type": "error", "code": exc.reason.value, "message": str(exc)})
+            err: dict[str, Any] = {"type": "error", "code": exc.reason.value, "message": str(exc)}
+            if kind == "ptt" and type(msg.get("press")) is int:
+                err["press"] = msg[
+                    "press"
+                ]  # which press this refuses (the client may have pressed again)
+            conn.push(err)
         except ControlDenied as exc:
             conn.push({"type": "error", "code": "control_denied", "message": str(exc)})
         except RadioError as exc:
             conn.push({"type": "error", "code": "radio", "message": str(exc)})
-        except ValueError as exc:
+        except (ValueError, TypeError, OverflowError) as exc:  # wrong value types from a client
             conn.push({"type": "error", "code": "bad_request", "message": str(exc)})
 
 

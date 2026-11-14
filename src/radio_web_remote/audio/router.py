@@ -31,6 +31,13 @@ RxListener = Callable[[bytes], None]
 RETRY_S = 10.0
 
 
+def _later_hint(backend: AudioBackend) -> str:
+    if backend.can_reload():
+        return ""
+    # PortAudio's device list is reloaded only with no audio running anywhere.
+    return " (a device connected after the server started is found after a restart)"
+
+
 class AudioMode(Enum):
     REMOTE = "remote"
     HOST = "host"
@@ -95,7 +102,7 @@ class AudioRouter:
                     await self.radio.start()
                     self.running, self.error = True, None
                 except Exception as exc:
-                    self.error = str(exc) or type(exc).__name__
+                    self.error = (str(exc) or type(exc).__name__) + _later_hint(self.radio)
                     log.warning("audio not available: %s (retrying in %.0f s)", self.error, RETRY_S)
                     await self._stop_all()  # never leave half of it open between tries
                     reload = True
@@ -104,7 +111,7 @@ class AudioRouter:
                     await self.host.start()
                     host_up, self.error = True, None
                 except Exception as exc:
-                    error = f"host audio: {exc or type(exc).__name__}"
+                    error = f"host audio: {str(exc) or type(exc).__name__}" + _later_hint(self.host)
                     if error != self.error:
                         log.warning("%s (retrying in %.0f s)", error, RETRY_S)
                     self.error = error

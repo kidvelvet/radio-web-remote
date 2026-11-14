@@ -48,7 +48,7 @@ const STOP_TEXT = {
 
 const app = {
   me: null, ws: null, hello: null, state: null, retry: 500,
-  heartbeat: null, ptt: false, pressed: false, serverStop: false, dragging: false, activeLevel: null,
+  heartbeat: null, ptt: false, pressed: false, serverStop: false, pressId: 0, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
   scope: null, scopeOn: false,
   audio: null, audioMode: null, rxStats: null, txLevel: null,
@@ -158,6 +158,8 @@ function onError(msg) {
     if (app.state) render(app.state);
   }
   if (["held_by_other", "not_permitted", "out_of_limits", "release_first", "radio_error"].includes(msg.code)) {
+    // A late refusal of an earlier press must not drop a newer one the server keyed.
+    if (msg.press != null && msg.press !== app.pressId) return;
     localPtt(false);
   }
   const text = {
@@ -303,7 +305,8 @@ function setPtt(down) {
   }
   app.pressed = down;
   localPtt(down);
-  send({ type: "ptt", down });
+  if (down) send({ type: "ptt", down, press: ++app.pressId });
+  else send({ type: "ptt", down });
 }
 
 function wirePtt() {

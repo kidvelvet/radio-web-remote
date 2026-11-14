@@ -20,12 +20,15 @@ $uv = ".tools\Scripts\uv.exe"
 if (-not (Test-Path $uv)) {
     Write-Host "Creating .tools\ with uv"
     & $py -m venv .tools
+    if ($LASTEXITCODE -ne 0) { throw "could not create .tools" }
     & .tools\Scripts\python.exe -m pip install --quiet --upgrade pip
     & .tools\Scripts\python.exe -m pip install --quiet uv
+    if ($LASTEXITCODE -ne 0) { throw "could not install uv" }
 }
 
 $pyPath = & $py -c "import sys; print(sys.executable)"
 & $uv sync --python $pyPath
+if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
 
 Write-Host ""
 Write-Host "Ready. Run the tests with:"

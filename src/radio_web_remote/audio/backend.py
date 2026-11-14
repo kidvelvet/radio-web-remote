@@ -101,6 +101,10 @@ class AudioBackend(ABC):
     def reload_devices(self) -> None:  # noqa: B027  (optional: most backends have no list)
         """Re-read the system's device list. Only call with every stream closed."""
 
+    def can_reload(self) -> bool:
+        """False while a reload would cut other audio, so it is not done."""
+        return True
+
     def write_tx(self, frame_pcm: bytes) -> None:
         self.fifo.write(frame_pcm)
 
@@ -180,7 +184,7 @@ class SoundDeviceBackend(AudioBackend):
         # PortAudio caches its device list; reloading is the only way to see a
         # device plugged in later. It closes every stream in the process, so it
         # is skipped while any backend (another radio's, say) has streams open.
-        if any(b._streams for b in _OPEN):
+        if not self.can_reload():
             log.debug("audio device list not reloaded: other streams are open")
             return
         import sounddevice as sd
@@ -188,6 +192,9 @@ class SoundDeviceBackend(AudioBackend):
         with contextlib.suppress(Exception):  # not initialised after a failed reload
             sd._terminate()
         sd._initialize()
+
+    def can_reload(self) -> bool:
+        return not any(b._streams for b in _OPEN if b is not self)
 
     def _open_streams(self, sd: Any) -> None:
         self.device_rate = self._pick_rate(sd)

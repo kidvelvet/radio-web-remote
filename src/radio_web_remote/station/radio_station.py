@@ -67,6 +67,7 @@ class RadioLost(ConnectionError):
 
 STABLE_LINK_S = 10.0  # a link up this long resets the reconnect backoff
 NG_BEFORE_SKIP = 3  # a slow item answered NG this many times in a row is skipped
+SCOPE_RETRY_S = 5.0  # a scope on/off the radio refused is retried this often
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,9 @@ class RadioStation:
         self._listeners: list[StateListener] = []
         self._scope_listeners: list[ScopeListener] = []
         self._scope_wanted = False
+        self._scope_applied = False  # what the radio was last told successfully
+        self._scope_failed = False
+        self._scope_retry_at = 0.0
         self._task: asyncio.Task[None] | None = None
         self._ng_counts: dict[str, int] = {}
         self._recheck_hz: int | None = None
@@ -298,11 +302,8 @@ class RadioStation:
             scope_edges=driver.scope_edges(),
             coverage_hz=driver.coverage_hz(),
         )
-        if self._scope_wanted and Feature.SCOPE in driver.features:
-            try:
-                await driver.set_scope_output(True)  # re-apply after a reconnect
-            except (RadioRejected, RadioBadReply, RadioTimeout) as exc:
-                log.warning("radio %s: scope output not re-enabled: %s", self.cfg.id, exc)
+        self._scope_applied = self._scope_failed = False
+        await self._apply_scope(driver)  # re-apply after a reconnect
         slow = self._slow_items(driver)
         timeouts = 0
         for item in slow:  # read everything once up front
@@ -327,6 +328,7 @@ class RadioStation:
                     raise RadioLost(f"meter polling failed: {meters.exception()}")
                 try:
                     await self._poll_once(driver)
+                    await self._apply_scope(driver)  # retried until the radio takes it
                     if slow:  # one slow item per tick, round robin
                         await self._poll_slow(driver, slow[turn % len(slow)])
                         turn += 1
@@ -536,12 +538,26 @@ class RadioStation:
             return
         self._scope_wanted = wanted
         driver = self._driver
-        if driver is None or not self._connected or Feature.SCOPE not in driver.features:
+        if driver is not None and self._connected:
+            await self._apply_scope(driver)
+
+    async def _apply_scope(self, driver: RadioDriver) -> None:
+        if self._scope_wanted == self._scope_applied or Feature.SCOPE not in driver.features:
             return
+        if self._scope_failed and self._loop_time() < self._scope_retry_at:
+            return  # a radio that keeps refusing is not asked on every poll
+        wanted = self._scope_wanted
         try:
             await driver.set_scope_output(wanted)
         except RadioError as exc:
-            log.warning("scope %s failed on %s: %s", "on" if wanted else "off", self.cfg.id, exc)
+            if not self._scope_failed:  # retried every poll; said once
+                log.warning(
+                    "scope %s failed on %s: %s", "on" if wanted else "off", self.cfg.id, exc
+                )
+            self._scope_failed = True
+            self._scope_retry_at = self._loop_time() + SCOPE_RETRY_S
+            return
+        self._scope_applied, self._scope_failed = wanted, False
 
     # -- controls ----------------------------------------------------------
     def _require_control(self, op: Operator) -> RadioDriver:

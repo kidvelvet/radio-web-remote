@@ -199,7 +199,7 @@ class IcomSimulator:
                 return p + scope_civ.encode_span(st.scope_span)
             try:
                 st.scope_span = scope_civ.decode_span(arg)
-            except BcdError:
+            except ValueError:  # BcdError, or ReplyError for a wrong length
                 return ng
             return ok if st.scope_span in scope_civ.SPANS_HZ else ng
         if sub == b"\x19":
