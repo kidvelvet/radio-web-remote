@@ -3,6 +3,7 @@
 Run: .tools/bin/uv run pytest -m e2e --browser chromium --browser firefox --browser webkit
 """
 
+import json
 import re
 
 import pytest
@@ -273,6 +274,66 @@ def test_ic705_page_shows_its_own_modes_and_scope_options(page: Page, server):
     page.select_option("#sc-mode", "center")
 
 
+def test_radio_menu_switches_in_place_and_is_remembered(page: Page, server):
+    login(page, server)
+    expect(page.locator("#title")).to_be_hidden()
+    pick = page.locator("#radio-pick")
+    expect(pick).to_be_visible()
+    assert _options(page, "#radio-pick") == ["sim-ic7300", "sim-ic705", "sim-ic9700"]
+    expect(pick.locator("option").first).to_have_text("sim-ic7300 (IC-7300)")
+    expect(pick).to_have_value("sim-ic7300")
+    _scope_on(page)
+    page.evaluate("window.rwrMark = 1")  # gone if the page reloads
+    pick.select_option("sim-ic705")
+    expect(page).to_have_url(re.compile(r"/\?radio=sim-ic705$"))
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(page.locator("#modes button:has-text('DV')")).to_be_visible(timeout=10_000)
+    expect(page.locator("#scope-edges")).to_have_text(re.compile(r"MHz"), timeout=10_000)
+    assert page.evaluate("window.rwrMark") == 1  # switched in place
+    # The home-screen app opens "/": it comes back to the radio used last.
+    page.goto("/")
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(pick).to_have_value("sim-ic705")
+    expect(page.locator("#modes button:has-text('DV')")).to_be_visible(timeout=10_000)
+
+
+def test_radio_menu_switches_with_an_older_cached_scope_script(page: Page, server):
+    # An iPhone kept scope.js from before Scope.clear() existed: the switch must still happen.
+    def old_scope(route):
+        resp = route.fetch()
+        route.fulfill(response=resp, body=resp.text().replace("  clear() {", "  gone() {"))
+
+    page.route("**/static/js/scope.js", old_scope)
+    login(page, server)
+    _scope_on(page)
+    page.select_option("#radio-pick", "sim-ic705")
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(page.locator("#modes button:has-text('DV')")).to_be_visible(timeout=10_000)
+
+
+def test_changing_radio_releases_ptt_first(page: Page, server, browser):
+    watcher_ctx = browser.new_context(base_url=server["url"], ignore_https_errors=True)
+    watcher = watcher_ctx.new_page()
+    try:
+        login(watcher, server, "lee")
+        login(page, server)
+        page.check("#toggle")
+        page.click("#ptt")
+        expect(watcher.locator("#txtext")).to_have_text("TX held by N0OP", timeout=5_000)
+        page.select_option("#radio-pick", "sim-ic705")
+        expect(watcher.locator("#txtext")).to_have_text("Receive", timeout=5_000)
+        expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+        expect(page.locator("#txtext")).to_have_text("Receive", timeout=5_000)
+        expect(page.locator("#ptt")).to_have_attribute("aria-pressed", "false")
+        # The page released PTT before it closed the socket (not "connection_closed").
+        audit = (server["dir"] / "logs" / "audit.log").read_text().splitlines()
+        stops = [e for e in map(json.loads, audit) if e.get("event") == "tx_stop"]
+        assert stops[-1]["radio"] == "sim-ic7300"
+        assert stops[-1]["reason"] == "released"
+    finally:
+        watcher_ctx.close()
+
+
 def _band_names(page: Page) -> list[str]:
     return page.eval_on_selector_all("#bands button", "els => els.map(e => e.textContent)")
 
@@ -336,6 +397,35 @@ def test_listen_only_audio_plays(page: Page, server):
     )
     page.click("#au-start")
     expect(page.locator("#au-start")).to_have_text("Start audio")
+
+
+def test_audio_keeps_playing_after_changing_radio(page: Page, server):
+    # Count receive-audio frames (kind byte 2) on every control socket.
+    page.add_init_script(
+        """window.rwrAudio = 0;
+        const Native = window.WebSocket;
+        window.WebSocket = class extends Native {
+          constructor(...a) {
+            super(...a);
+            this.addEventListener("message", (ev) => {
+              const d = ev.data;
+              if (d instanceof ArrayBuffer && new Uint8Array(d)[0] === 2) window.rwrAudio++;
+            });
+          }
+        };"""
+    )
+    login(page, server)
+    page.select_option("#au-mode", "monitor")
+    page.click("#au-start")
+    _audio_started(page)
+    page.wait_for_function("() => window.rwrAudio > 10", timeout=10_000)
+    page.select_option("#radio-pick", "sim-ic9700")
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(page.locator("#title")).to_have_text("IC-9700", timeout=10_000)
+    before = page.evaluate("window.rwrAudio")
+    page.wait_for_function("n => window.rwrAudio > n", arg=before + 10, timeout=10_000)
+    expect(page.locator("#au-start")).not_to_have_text("Start audio")
+    page.click("#au-start")
 
 
 def test_resume_audio_after_reopening(page: Page, server):

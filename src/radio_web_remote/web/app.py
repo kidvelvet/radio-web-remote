@@ -83,6 +83,10 @@ class SecurityHeaders(BaseHTTPMiddleware):
             response.headers.setdefault(k, v)
         if not request.url.path.startswith("/static/"):
             response.headers.setdefault("Cache-Control", "no-store")
+        else:
+            # Ask the server each time (a 304 when unchanged): after an upgrade a
+            # cached script must not run against the new page, or the reverse.
+            response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
 

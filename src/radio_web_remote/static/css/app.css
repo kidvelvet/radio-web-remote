@@ -57,6 +57,14 @@ header.bar {
   flex-wrap: wrap;
 }
 header.bar h1 { font-size: 1.05rem; margin: 0; font-weight: 650; }
+/* The radio menu, shown in place of the title when the server has more than one radio.
+   16px or more, or iOS zooms the page when it is tapped. */
+header.bar #radio-pick {
+  font: inherit; font-size: 1.05rem; font-weight: 650; color: #fff;
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.4); border-radius: 8px;
+  min-height: 40px; padding: 0 8px; max-width: 60vw; text-overflow: ellipsis;
+}
+header.bar #radio-pick option { color: #000; background: #fff; }
 header.bar .spacer { flex: 1; }
 header.bar .who { font-size: .9rem; opacity: .85; }
 main { max-width: 960px; margin: 0 auto; padding: 16px; }

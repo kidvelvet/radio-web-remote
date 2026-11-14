@@ -185,6 +185,15 @@ export class Scope {
     }
   }
 
+  // Another radio: drop the last one's picture.
+  clear() {
+    this.queue = [];
+    this.last = null;
+    this.fallCtx?.clearRect(0, 0, this.fall.width, this.fall.height);
+    this.edges.textContent = "";
+    this.redrawSpectrum();
+  }
+
   setMarker(hz) {
     if (hz !== this.markerHz) { this.markerHz = hz; this.redrawSpectrum(); }
   }

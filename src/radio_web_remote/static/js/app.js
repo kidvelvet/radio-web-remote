@@ -47,7 +47,7 @@ const STOP_TEXT = {
 };
 
 const app = {
-  me: null, ws: null, hello: null, state: null, retry: 500,
+  me: null, radio: null, ws: null, reconnectTimer: null, hello: null, state: null, retry: 500,
   heartbeat: null, ptt: false, pressed: false, serverStop: false, pressId: 0, onAir: false, staleSince: null, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
   scope: null, scopeOn: false,
@@ -90,7 +90,12 @@ function connect() {
     // Said once: reconnects must not repeat it over a newer message.
     history.replaceState(null, "", location.pathname + (known[0] ? `?radio=${encodeURIComponent(known[0])}` : ""));
   }
-  const radio = asked && known.includes(asked) ? asked : known[0] || "";
+  // No radio in the address (the home-screen app opens "/"): the one used last.
+  const last = recall("rwr.radio");
+  const radio = asked && known.includes(asked) ? asked : known.includes(last) ? last : known[0] || "";
+  app.radio = radio;
+  $("radio-pick").value = radio;
+  if (radio) remember("rwr.radio", radio);
   const ws = new WebSocket(`wss://${location.host}/ws?radio=${encodeURIComponent(radio)}`);
   ws.binaryType = "arraybuffer";
   app.ws = ws;
@@ -118,9 +123,10 @@ function connect() {
     $("ptt").disabled = true;
     if ($("txbar").dataset.state !== "danger") {  // the last state shown is no longer known
       $("txbar").dataset.state = "held";
-      setText("txtext", "No link to the server. It stops TX on its own.");
+      setText("txtext", ws.switching ? "Changing radio" : "No link to the server. It stops TX on its own.");
       setText("txlevel", "");
     }
+    if (ws.switching) { connect(); return; }  // closed on purpose to change radios
     if (ev.code === 4001) { location.replace("/login"); return; }
     if (!ws.opened) {
       // Refused before it opened (the browser reports 1006): maybe the session
@@ -129,9 +135,48 @@ function connect() {
         .then((r) => { if (r.status === 401) location.replace("/login"); })
         .catch(() => {});
     }
-    setTimeout(connect, app.retry);
+    app.reconnectTimer = setTimeout(connect, app.retry);
     app.retry = Math.min(app.retry * 2, 5000);
   };
+}
+
+// ---------- radio menu ----------
+// "IC-7300" for a radio whose id is its model; "shack-hf (IC-7300)" otherwise.
+function radioLabel(id, model) {
+  const bare = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!model) return id;
+  return bare(id) === bare(model) ? model : `${id} (${model})`;
+}
+
+function buildRadioPick() {
+  const radios = app.me.radios || [];
+  const pick = $("radio-pick");
+  pick.replaceChildren(...radios.map((r) => new Option(radioLabel(r.id, r.model), r.id)));
+  // One radio: the title says which; nothing to pick.
+  pick.classList.toggle("hidden", radios.length < 2);
+  $("title").classList.toggle("hidden", radios.length >= 2);
+  pick.addEventListener("change", () => switchRadio(pick.value));
+}
+
+function switchRadio(id) {
+  if (id === app.radio) return;
+  setPtt(false);  // sent on the old socket before it closes
+  history.replaceState(null, "", `${location.pathname}?radio=${encodeURIComponent(id)}`);
+  remember("rwr.radio", id);
+  app.state = null;
+  app.pendingHz = null;
+  const ws = app.ws;
+  if (!ws || ws.readyState === WebSocket.CLOSED) {  // between retries: go now, not when the timer fires
+    clearTimeout(app.reconnectTimer);
+    connect();
+  } else {
+    ws.switching = true;
+    ws.close(1000);
+  }
+  // Display only, after the switch is under way: a failure here (such as a
+  // script cached from an older version) must not leave the old radio connected.
+  showMsg("");
+  app.scope?.clear();
 }
 
 function setLink(state) {
@@ -179,6 +224,12 @@ function render(s) {
   const prev = app.state;
   app.state = s;
   $("title").textContent = s.model ? `${s.model}` : "Radio Remote";
+  // The radio may have been offline when the menu was built: name it now.
+  const opt = [...$("radio-pick").options].find((o) => o.value === app.radio);
+  if (opt && s.model) {
+    const label = radioLabel(app.radio, s.model);
+    if (opt.text !== label) opt.text = label;
+  }
   const feats = new Set(s.features || []);
   document.querySelectorAll("[data-feature]").forEach((el) => {
     el.classList.toggle("hidden", !feats.has(el.dataset.feature));
@@ -762,6 +813,7 @@ async function boot() {
   app.me = await r.json();
   $("who").textContent = app.me.callsign ? `${app.me.callsign} (${app.me.role})` : `${app.me.username} (${app.me.role})`;
   $("logout").addEventListener("click", logout);
+  buildRadioPick();
   wirePtt();
   wireTuning();
   wireControls();

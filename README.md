@@ -29,6 +29,8 @@ The core is vendor-neutral; other makers can be added
 - Frequency (type it, step it, drag it, or tap the scope), mode, filter,
   DATA mode, AF and RF gain, squelch, RF power, and S, Po, SWR and ALC meters.
 - Spectrum scope and waterfall in every scope mode the radio documents.
+- Several radios on one computer: a menu at the top of the page switches
+  between them, and the page opens on the radio used last.
 - Audio both ways in the browser, or on the radio computer's own mic and
   speaker. Works on iPhone and iPad in Safari and as a home-screen app.
 - **Transmit safety enforced on the server:** unkey on release, closed

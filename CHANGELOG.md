@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- With more than one radio, a menu at the top of the page switches between
+  them in place: audio and the scope keep running, and PTT is released before
+  the switch. The page, and the home-screen app, open on the radio used last.
+- Scripts and style sheets are checked with the server on every load, so a
+  browser never runs a cached script against a newer page after an upgrade.
+
 ## 0.1.0 (2026-11-14)
 
 First release. Browser remote for Icom transceivers over USB, for the LAN or

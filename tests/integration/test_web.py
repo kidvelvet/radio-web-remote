@@ -146,6 +146,14 @@ def test_security_headers(env):
     assert "microphone=(self)" in r.headers["permissions-policy"]
 
 
+def test_static_files_are_revalidated(env):
+    r = env["client"].get("/static/js/app.js")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    again = env["client"].get("/static/js/app.js", headers={"if-none-match": r.headers["etag"]})
+    assert again.status_code == 304
+
+
 def test_public_routes(env):
     c = env["client"]
     assert c.get("/login").status_code == 200
