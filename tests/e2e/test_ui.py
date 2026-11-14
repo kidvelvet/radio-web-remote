@@ -275,6 +275,13 @@ def test_ic9700_main_sub_and_band_shortcuts(page: Page, server):
     expect(freq).to_have_text("432.100.000", timeout=5_000)
     page.click("[data-band=main]")
     expect(freq).to_have_text(main_text, timeout=5_000)
+    # Dualwatch off: the radio refuses SUB, so the page disables it (H9700-2).
+    expect(page.locator("#band-dw")).to_have_attribute("aria-pressed", "true")
+    page.click("#band-dw")
+    expect(page.locator("#band-dw")).to_have_attribute("aria-pressed", "false", timeout=5_000)
+    expect(page.locator("[data-band=sub]")).to_be_disabled()
+    page.click("#band-dw")
+    expect(page.locator("[data-band=sub]")).to_be_enabled(timeout=5_000)
 
 
 def _audio_started(page: Page):

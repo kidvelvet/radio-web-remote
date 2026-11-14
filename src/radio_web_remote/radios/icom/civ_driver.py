@@ -467,6 +467,14 @@ class IcomCivDriver(RadioDriver):
         self._require(CivCommand.BAND_EXCHANGE)
         await self._transact(CivCommand.BAND_EXCHANGE, CivCommand.BAND_EXCHANGE.prefix, False)
 
+    async def get_dualwatch(self) -> bool:
+        return await self._read_flag(CivCommand.DUALWATCH) == 1
+
+    async def set_dualwatch(self, on: bool) -> None:
+        self._require(CivCommand.DUALWATCH)
+        flag = b"\x01" if on else b"\x00"
+        await self._transact(CivCommand.DUALWATCH, CivCommand.DUALWATCH.prefix + flag, False)
+
     async def get_satellite(self) -> bool:
         return await self._read_flag(CivCommand.SATELLITE) == 1
 

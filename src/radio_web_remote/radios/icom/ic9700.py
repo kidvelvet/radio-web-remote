@@ -6,11 +6,13 @@ Sources, all Icom's own PDFs (see docs/civ-reference.md):
 Page numbers are the ones printed on the page. Nothing here is copied from
 another model's table.
 
-MAIN and SUB are two receive bands. Commands 03 to 06 are assumed to act on
-the selected band; the guide does not say so (TODO(verify) on hardware,
-docs/hardware-test.md). Normally only MAIN transmits; in satellite mode SUB
-is the uplink (9700-BM 3-2, 7-1). The TX limit check therefore reads 1C 03
-rather than trusting the displayed band.
+MAIN and SUB are two receive bands. On hardware (firmware 1.50, H9700-2/-5):
+commands 03 to 06 act on the selected band, and the selected band is the one
+that transmits; in satellite mode SUB is the uplink (9700-BM 7-1). The guide
+does not say this, and the Basic Manual's "transmit on only the Main band"
+(3-2) does not describe CI-V band selection. 1C 03 reported the real TX
+frequency in every case tried (MAIN, SUB, satellite, repeater shift), so the
+TX limit check reads it rather than trusting the displayed band.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ IC9700 = IcomModel(
         CivCommand.SET_MODE: _src("4, 13", "06 Set the operating mode"),
         CivCommand.BAND_EXCHANGE: _src("4", "07 B0 exchange MAIN and SUB bands"),
         CivCommand.BAND_MAIN: _src("4", "07 D0 select the MAIN band"),
-        CivCommand.BAND_SUB: _src("4", "07 D1 select the SUB band"),
+        CivCommand.BAND_SUB: _src("4", "07 D1 select the SUB band (NG while Dualwatch is off)"),
         CivCommand.BAND_SELECTION: _src("4", "07 D2 + 00 MAIN / 01 SUB, send/read"),
         CivCommand.DUALWATCH: _src("5", "16 59 sub band (Dualwatch) 00 OFF / 01 ON"),
         CivCommand.SATELLITE: _src("5", "16 5A satellite mode 00 OFF / 01 ON"),

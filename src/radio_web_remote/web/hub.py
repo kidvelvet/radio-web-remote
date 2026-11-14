@@ -15,6 +15,7 @@ Client -> server (JSON):
   {"type": "audio", "mode": "remote" | "host" | "monitor" | null}
   {"type": "set_band", "band": "main" | "sub"}   (dual-band radios)
   {"type": "swap_bands"}
+  {"type": "set_dualwatch", "on": true | false}   (SUB receiver)
   binary 0x03 frames: transmit audio (audio/pcm.py), used only from the TX holder
   {"type": "set_scope", "setting": "mode"|"span"|"edge"|"hold"|"ref"|"speed", "value": ...}
 
@@ -375,6 +376,11 @@ class Hub:
                 await station.set_band(op, str(band))
             elif kind == "swap_bands":
                 await station.swap_bands(op)
+            elif kind == "set_dualwatch":
+                on = msg.get("on")
+                if not isinstance(on, bool):
+                    raise ValueError("on must be true or false")
+                await station.set_dualwatch(op, on)
             elif kind == "set_scope":
                 name = msg.get("setting")
                 value = msg.get("value")

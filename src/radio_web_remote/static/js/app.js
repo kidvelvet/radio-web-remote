@@ -163,6 +163,9 @@ function render(s) {
   buildBands(s.coverage_hz);
   document.querySelectorAll("[data-band]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.band === s.band)));
   $("satnote").classList.toggle("hidden", !s.satellite);
+  $("band-dw").setAttribute("aria-pressed", String(!!s.dualwatch));
+  // The radio refuses to select SUB while its SUB receiver is off (H9700).
+  document.querySelector("[data-band=sub]").disabled = s.dualwatch === false;
   document.querySelectorAll("#modes button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === s.mode)));
   document.querySelectorAll("[data-filter]").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.filter) === s.filter)));
   $("data").setAttribute("aria-pressed", String(!!s.data_mode));
@@ -383,6 +386,7 @@ function wireTuning() {
     send({ type: "set_band", band: b.dataset.band });
   }));
   $("band-swap").addEventListener("click", () => send({ type: "swap_bands" }));
+  $("band-dw").addEventListener("click", () => send({ type: "set_dualwatch", on: !app.state?.dualwatch }));
 }
 
 // ---------- mode, filter, levels ----------

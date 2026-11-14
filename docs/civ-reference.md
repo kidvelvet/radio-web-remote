@@ -110,21 +110,22 @@ the CI-V address and Echo Back (705-AM 9-9).
 ## IC-9700
 
 Read in Icom's own PDFs. Code: `src/radio_web_remote/radios/icom/ic9700.py`.
-Not yet checked on hardware (docs/hardware-test.md, H9700 rows).
+Checked on firmware 1.50 (docs/hardware-test.md, H9700 rows).
 
 | Function | Bytes | Source | Notes |
 |----------|-------|--------|-------|
 | Default CI-V address | `A2` | 9700-CIV p. 2; 9700-BM 8-16 | |
-| Frequency, mode (transceive, read, set) | `00`, `01`, `03`, `04`, `05`, `06` | 9700-CIV pp. 4, 13 | Assumed to act on the selected band: **not stated**; TODO(verify) H9700-2 |
+| Frequency, mode (transceive, read, set) | `00`, `01`, `03`, `04`, `05`, `06` | 9700-CIV pp. 4, 13 | Act on the selected band: not stated in the guide, confirmed on hardware (H9700-2) |
 | Frequency format | 5 bytes BCD; byte 5 holds the 1 GHz digit (0, 1) and the 100 MHz digit (0 to 4) | 9700-CIV p. 13 | 1296.1 MHz encodes as `00 00 10 96 12` |
 | Mode codes | LSB 00, USB 01, AM 02, CW 03, RTTY 04, FM 05, CW-R 07, RTTY-R 08, DV 17, DD 22 | 9700-CIV p. 13 | No 06. DD only on 1200 MHz and not in satellite mode |
 | Filters | FIL1 to FIL3 | 9700-CIV p. 13 | None for DV and DD |
-| Select MAIN / SUB, read selection | `07 D0`, `07 D1`, `07 D2` (+ 00/01) | 9700-CIV p. 4 | Reply layout of the read TODO(verify) H9700-3 |
+| Select MAIN / SUB, read selection | `07 D0`, `07 D1`, `07 D2` (+ 00/01) | 9700-CIV p. 4 | Read replies `07 D2 00`/`01` (H9700-3). `07 D1` is refused while Dualwatch is off (H9700-2) |
 | Exchange MAIN and SUB | `07 B0` | 9700-CIV p. 4 | |
 | Dualwatch, satellite mode | `16 59`, `16 5A`, 00/01 | 9700-CIV p. 5 | |
-| Which band transmits | MAIN, except split; SUB in satellite mode | 9700-BM 3-2, 7-1 | So the TX limit check reads `1C 03` |
+| Which band transmits | Manual: "only the Main band" except split; SUB in satellite mode | 9700-BM 3-2, 7-1 | **Hardware: the selected band transmits** (H9700-5). `1C 03` reported the real TX frequency for MAIN, SUB, satellite and a repeater shift, so the TX limit check reads it |
 | TX state / PTT; read TX frequency | `1C 00`; `1C 03` | 9700-CIV pp. 11, 13 | |
-| Levels and meters | `14 01/02/03/0A`, `15 02/11/12/13` | 9700-CIV pp. 4, 5 | Same calibration points as printed for the IC-705; which band they act on is not stated |
+| Levels and meters | `14 01/02/03/0A`, `15 02/11/12/13` | 9700-CIV pp. 4, 5 | Same calibration points as printed for the IC-705; AF and squelch act on the selected band (H9700-2) |
+| Split / duplex | `0F` read: 00 split off, 01 on, 11 DUP-, 12 DUP+, 13 RPS; set 10 simplex | 9700-CIV p. 4 | Used only by the hardware test; the TX check relies on `1C 03`, which includes the shift (H9700-6) |
 | DATA mode | `1A 06` | 9700-CIV pp. 11, 18 | |
 | Scope data | `27 00`, byte 1 = 00 Main / 01 Sub scope; 475 points, 0 to 160; 11 divisions over USB | 9700-CIV pp. 12, 25 | |
 | Scope band | `27 12` 00 Main / 01 Sub | 9700-CIV p. 12 | The driver sets it with the selected band and uses it as the 27 1x selector |
@@ -132,8 +133,11 @@ Not yet checked on hardware (docs/hardware-test.md, H9700 rows).
 | Coverage, USA version | 144-148, 430-450, 1240-1300 MHz | 9700-BM 11-1 | For band shortcuts only |
 | Time-Out Timer | `1A 05 0041`: OFF (default), 3 to 30 min | 9700-CIV p. 6; 9700-BM 8-3 | |
 
-Open: which band levels and meters act on; USB audio content with Dualwatch;
-USB VID/PID; transceive destination address. Reading the SUB band without
+USB (H9700-1): two CP2102N bridges, 10C4:EA60, serial strings ending A and
+B; A carries CI-V. The codec is two devices named "USB Audio CODEC" (one per
+direction) on macOS.
+
+Open: USB audio content with Dualwatch on; transceive destination address. Reading the SUB band without
 selecting it is not possible (`25`/`26` are MAIN only, 9700-CIV p. 24), so the
 page shows the selected band only.
 

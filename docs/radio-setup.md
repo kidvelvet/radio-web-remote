@@ -82,7 +82,8 @@ A PRESET memory can change the CI-V address and echo back (Advanced Manual
 ## IC-9700
 
 Source: Icom IC-9700 Basic Manual A7508H-1EX-7, sections 8 and 3 (Icom's
-PDF), and the CI-V Reference Guide A7508-3EX-4. Not yet checked on hardware.
+PDF), and the CI-V Reference Guide A7508-3EX-4. Checked on firmware 1.50
+(docs/hardware-test.md, H9700 rows).
 
 | Setting | Set it to | Why | Default | Page |
 |---------|-----------|-----|---------|------|
@@ -91,7 +92,7 @@ PDF), and the CI-V Reference Guide A7508-3EX-4. Not yet checked on hardware.
 | CI-V > CI-V Address | **A2h**, or match `civ_address` | | A2h | 8-16 |
 | CI-V > CI-V Transceive | **ON** | | ON | 8-16 |
 | CI-V > CI-V USB Echo Back | either | | OFF | 8-16 |
-| MOD Input > DATA OFF MOD | **USB** or MIC,USB | Browser or host audio transmits in voice modes | MIC,ACC | 8-15 |
+| MOD Input > DATA OFF MOD | **MIC,USB** (or USB) | Browser or host audio transmits in voice modes. At the default MIC,ACC the radio sends a silent carrier from the page (seen in H9700-10) | MIC,ACC | 8-15 |
 | MOD Input > DATA MOD | **USB** | Audio in DATA modes | ACC | 8-15 |
 | MOD Input > USB MOD Level | start at **50%** | | 50% | 8-15 |
 | USB SEND/Keying > USB SEND | **OFF** for CI-V PTT | | OFF | 8-15 |
@@ -102,6 +103,11 @@ Two virtual COM ports appear: **USB (A)** carries CI-V (Basic Manual 8-16).
 few seconds after the USB link comes up, so the first key-up after the
 server connects may be refused by the radio.
 
-Only MAIN transmits, except in split; in satellite mode SUB is the uplink
-(Basic Manual 3-2, 7-1). The server checks the radio's own transmit
-frequency before keying, whichever band the page shows.
+The page's MAIN and SUB buttons choose the band the controls act on, and
+on the IC-9700 that is also the band that transmits (seen on hardware,
+H9700-5); in satellite mode SUB is the uplink (Basic Manual 7-1). The server
+reads the radio's own transmit frequency before keying (this also covers a
+repeater shift), so band limits apply to where the radio really transmits.
+
+SUB can only be selected while the SUB receiver (Dualwatch) is on; the page's
+Dualwatch button turns it on or off.

@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from radio_web_remote.config import PttConfig, RadioConfig
-from radio_web_remote.radios.base import Mode, ModeSetting
+from radio_web_remote.radios.base import Mode, ModeSetting, RadioRejected
 from radio_web_remote.radios.icom import IC7300
 from radio_web_remote.sim.icom import IcomSimulator, attach_loopback, push_unsolicited
 from radio_web_remote.station.radio_station import ControlDenied, RadioStation
@@ -269,6 +269,19 @@ async def test_band_state_and_controls(bench9700):
     sim.state.selected_band = 0  # changed at the radio: a slow poll notices
     sim._swap_band_values()
     await wait_for(lambda: st.state.band == "main", timeout=3.0)
+
+
+async def test_dualwatch_control(bench9700):
+    st = bench9700.station
+    await wait_for(lambda: st.state.dualwatch is True)
+    await st.set_band(ALICE, "sub")
+    await st.set_dualwatch(ALICE, False)
+    assert st.state.dualwatch is False and st.state.band == "main"
+    with pytest.raises(RadioRejected):  # the radio refuses SUB
+        await st.set_band(ALICE, "sub")
+    await st.set_dualwatch(ALICE, True)
+    await st.set_band(ALICE, "sub")
+    assert st.state.band == "sub"
 
 
 async def test_band_change_refused_while_transmitting(bench9700):

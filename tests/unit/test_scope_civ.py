@@ -154,3 +154,28 @@ def test_real_ic705_fourth_edge_header():
     asm = sc.ScopeAssembler()
     asm.feed(bytes.fromhex(FIX705["edge4_header"]))
     assert asm._header is not None and asm._header[1:3] == (7_000_000, 7_050_000)
+
+
+FIX9700 = json.loads((Path(__file__).parents[1] / "fixtures" / "ic9700_scope.json").read_text())
+
+
+@pytest.mark.parametrize(
+    ("key", "low", "high"),
+    [
+        ("00:center", 146_020_000, 147_020_000),  # MAIN 146.52, span +/-500 kHz
+        ("00:fixed", 144_000_000, 144_500_000),
+        ("00:scroll-c", 146_020_000, 147_020_000),
+        ("00:scroll-f", 146_500_000, 147_000_000),
+        ("01:center", 445_975_000, 446_025_000),  # SUB 446.000, span +/-25 kHz
+        ("01:fixed", 432_000_000, 433_000_000),
+        ("01:scroll-c", 445_975_000, 446_025_000),
+        ("01:scroll-f", 446_000_000, 447_000_000),
+    ],
+)
+def test_real_ic9700_sweeps(key, low, high):
+    """IC-9700 hardware (H9700-8): byte 1 is the scope band, otherwise like the IC-705."""
+    frames_ = [bytes.fromhex(f) for f in FIX9700["sweeps"][key]]
+    assert {f[2] for f in frames_} == {int(key[:2])}
+    asm = sc.ScopeAssembler()
+    line = [asm.feed(f) for f in frames_][-1]
+    assert line is not None and (line.low_hz, line.high_hz, len(line.points)) == (low, high, 475)

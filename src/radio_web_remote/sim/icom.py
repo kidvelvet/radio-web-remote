@@ -210,14 +210,17 @@ class IcomSimulator:
         return ng
 
     def tx_frequency_hz(self) -> int:
-        """1C 03: the frequency a key-up would use: MAIN, or SUB in satellite mode."""
+        """1C 03: the frequency a key-up would use.
+
+        IC-9700 hardware (H9700-5): the selected band transmits, MAIN or SUB;
+        in satellite mode the SUB (uplink) band does (Basic Manual 7-1).
+        """
         st = self.state
         if st.split_tx_hz is not None:
             return st.split_tx_hz
-        if not self.model.supports(CivCommand.BAND_MAIN):
+        if not self.model.supports(CivCommand.BAND_MAIN) or not st.satellite:
             return st.frequency_hz
-        tx_band = 1 if st.satellite else 0
-        return st.frequency_hz if st.selected_band == tx_band else st.other_band[0]
+        return st.frequency_hz if st.selected_band == 1 else st.other_band[0]
 
     def _swap_band_values(self) -> None:
         st = self.state
@@ -230,6 +233,8 @@ class IcomSimulator:
         st, ok, ng = self.state, bytes([OK]), bytes([NG])
         if p in (CivCommand.BAND_MAIN.prefix, CivCommand.BAND_SUB.prefix):
             want = 0 if p == CivCommand.BAND_MAIN.prefix else 1
+            if want == 1 and not st.dualwatch:
+                return ng  # hardware: 07 D1 is refused while the SUB receiver is off
             if want != st.selected_band:
                 self._swap_band_values()
                 st.selected_band = want
@@ -249,6 +254,9 @@ class IcomSimulator:
                     return p + (b"\x01" if getattr(st, attr) else b"\x00")
                 if data in (b"\x00", b"\x01"):
                     setattr(st, attr, data == b"\x01")
+                    if attr == "dualwatch" and not st.dualwatch and st.selected_band == 1:
+                        self._swap_band_values()  # SUB off: back to MAIN (TODO(verify))
+                        st.selected_band = 0
                     return ok
                 return ng
         return None

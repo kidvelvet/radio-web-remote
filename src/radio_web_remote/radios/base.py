@@ -199,6 +199,13 @@ class RadioDriver(ABC):
     async def swap_bands(self) -> None:
         raise Unsupported(f"{self.model_name} has no MAIN/SUB bands")
 
+    async def get_dualwatch(self) -> bool:
+        """SUB receiver on (IC-9700 "Dualwatch"); SUB cannot be selected while it is off."""
+        raise Unsupported(f"{self.model_name} has no MAIN/SUB bands")
+
+    async def set_dualwatch(self, on: bool) -> None:
+        raise Unsupported(f"{self.model_name} has no MAIN/SUB bands")
+
     async def get_satellite(self) -> bool:
         raise Unsupported(f"{self.model_name} has no documented satellite mode")
 

@@ -77,6 +77,7 @@ class RadioState:
     coverage_hz: tuple[tuple[int, int], ...] = ()  # for band shortcuts only
     band: str | None = None  # "main" / "sub" on dual-band radios
     satellite: bool | None = None  # satellite mode (TX on SUB), where the radio reports it
+    dualwatch: bool | None = None  # SUB receiver on; SUB can only be selected while on
     data_mode: bool | None = None
     levels: dict[str, int] = field(default_factory=dict)  # "af" -> 0..255
     meters: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -314,7 +315,7 @@ class RadioStation:
         if Feature.DATA_MODE in driver.features:
             items.append("data_mode")
         if Feature.MAIN_SUB in driver.features:
-            items.append("band")
+            items += ["band", "dualwatch"]
         if Feature.SATELLITE in driver.features:
             items.append("satellite")
         if Feature.SCOPE in driver.features:
@@ -341,6 +342,12 @@ class RadioStation:
             band = await driver.get_band()
             if self._unchanged_since("band", mark) and band != self.state.band:
                 self._update(band=band)  # changed at the radio; the next poll reads its frequency
+            return
+        if item == "dualwatch":
+            mark = self._writes.get("dualwatch", 0)
+            on = await driver.get_dualwatch()
+            if self._unchanged_since("dualwatch", mark) and on != self.state.dualwatch:
+                self._update(dualwatch=on)
             return
         if item == "satellite":
             sat = await driver.get_satellite()
@@ -536,6 +543,14 @@ class RadioStation:
         driver = self._require_band_change(op)
         await driver.set_band(band)
         await self._reread_band(driver)
+
+    async def set_dualwatch(self, op: Operator, on: bool) -> None:
+        driver = self._require_band_change(op)
+        self._bump("dualwatch")
+        await driver.set_dualwatch(on)
+        self._bump("dualwatch")
+        self._update(dualwatch=on)
+        await self._reread_band(driver)  # turning SUB off can move the selection to MAIN
 
     async def swap_bands(self, op: Operator) -> None:
         driver = self._require_band_change(op)
