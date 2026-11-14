@@ -1,0 +1,19 @@
+# Example: docker compose -f packaging/docker/compose.yaml up -d
+# Build context is the repository root.
+services:
+  radio-web-remote:
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile
+    restart: always            # the server sends TX off first thing when it starts
+    network_mode: host         # so the certificate covers the host's LAN addresses
+    volumes:
+      - ./data:/data           # config.yaml, users.db, tls/, logs/
+    devices:
+      # Pass the radio's serial port through. Prefer a stable name from
+      # packaging/udev/ or /dev/serial/by-id/ over /dev/ttyUSB0.
+      - /dev/ic7300:/dev/ic7300
+      - /dev/snd:/dev/snd      # the radio's USB audio codec
+    group_add:
+      - dialout
+      - audio

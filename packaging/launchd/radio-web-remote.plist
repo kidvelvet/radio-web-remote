@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent for radio-web-remote. install.sh service mode writes it
+  to ~/Library/LaunchAgents/ with @EXE@, @LABEL@ and @HOME@ filled in.
+
+  KeepAlive restarts the server if it exits: a key sent over CI-V survives
+  the server dying (docs/hardware-test.md, H7300-4 C), and the server sends
+  TX off first thing when it starts.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@EXE@</string>
+    <string>serve</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>@HOME@/Library/Logs/radio-web-remote.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/Library/Logs/radio-web-remote.log</string>
+</dict>
+</plist>

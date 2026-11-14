@@ -1,0 +1,30 @@
+# Example udev rules: stable names for Icom radios' USB serial ports.
+#
+# radio-web-remote does not need these: it finds the radio by USB serial
+# number (`match: usb_serial:` in config.yaml, or run `radio-web-remote
+# doctor`). They help other programs and Docker (packaging/docker/).
+#
+# Install: copy to /etc/udev/rules.d/, then `sudo udevadm control --reload`
+# and unplug and replug the radio (a reload does not change devices already
+# present; man udevadm(8)). Syntax: man udev(7).
+#
+# The vendor/product IDs and serial strings below were seen on macOS
+# (docs/hardware-test.md, H7300-1, H705-1, H9700-1). TODO(verify) on Linux:
+# print the real attribute names and values with
+#     udevadm info -a /dev/ttyUSB0      (or /dev/ttyACM0)
+# and copy them in. Replace 00000000 with your radio's serial.
+#
+# Permissions: these ports belong to the "dialout" group (upstream systemd
+# rule 50-udev-default) and sound devices to "audio" (Debian wiki
+# SystemGroups). Add yourself: sudo usermod -a -G dialout,audio $USER
+
+# IC-7300: one Silicon Labs CP2102 port, serial "IC-7300 <serial>".
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="IC-7300 00000000", SYMLINK+="ic7300"
+
+# IC-9700: two CP2102N ports, serials "IC-9700 <serial> A" (CI-V) and "... B".
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="IC-9700 00000000 A", SYMLINK+="ic9700-civ"
+
+# IC-705: two ports on one USB device (0c26:0036) with the same serial; port A
+# is CI-V. TODO(verify): which interface number is port A on Linux
+# (udevadm info shows ENV{ID_USB_INTERFACE_NUM}); "00" is a guess.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0c26", ATTRS{idProduct}=="0036", ENV{ID_USB_INTERFACE_NUM}=="00", SYMLINK+="ic705-civ"
