@@ -37,6 +37,7 @@ Maintainer's radio: firmware **1.42** (reported by the operator 2026-11-13). Res
 
 - 2026-11-13 (H7300-16): **macOS gives a process silence from every input device, including the radio's USB codec, until that process is granted Microphone access** (System Settings > Privacy & Security > Microphone). The server needs this even for listen-only. The same applies to a browser launched from a terminal. The IC-7300 codec shows as "USB Audio CODEC", USB 08BB:2901, 48 kHz, 2 channels in and out.
 
+- 2026-11-14, macOS 26, IC-9700: the server run as a **LaunchAgent received pure silence** from the codec (201 frames, all zero), with no Microphone prompt and no entry in the Microphone list, also when launched through a minimal app bundle with NSMicrophoneUsageDescription. Started from Terminal, the same server received audio (peak 0.29). So the macOS service runs in a Terminal window (packaging/install.sh).
 - 2026-11-13, macOS: the IC-7300 enumerates as a Silicon Labs CP2102, USB VID:PID 10C4:EA60, serial number string "IC-7300 <radio serial>", port `/dev/cu.usbserial-<location>`. The serial string names the model, which helps auto-detect (plan F11).
 - 2026-11-13: two commands written back to back get only one answer; with 2 ms or more between them, both are answered. The driver therefore keeps one command on the wire at a time, and the simulator drops commands that arrive before its reply (about 3 ms).
 - 2026-11-13: CI-V Baud was already 115200; no reply at 57600 or below.

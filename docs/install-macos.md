@@ -35,24 +35,27 @@ radio's USB codec**, until that program is allowed to use the microphone
 (seen on hardware, H7300-16). Allow it in **Apple menu > System Settings >
 Privacy & Security > Microphone**
 ([Apple](https://support.apple.com/guide/mac-help/control-access-to-the-microphone-on-mac-mchla1b1e1fe/mac)).
-When you start the server from Terminal, macOS asks for Terminal (or your
-terminal app). `doctor` warns "receive audio is pure silence" when this is
-the problem.
+When you start the server from Terminal, the permission belongs to Terminal
+(or your terminal app). `doctor` warns "receive audio is pure silence" when
+this is the problem.
 
-TODO(verify): which name appears in the Microphone list when the server runs
-as a LaunchAgent (below). If audio is silent there, run `radio-web-remote
-doctor` from Terminal to check the radio side.
+**Do not run it as a LaunchAgent.** Tested 2026-11-14 on macOS 26 with an
+IC-9700: under launchd the server received pure silence from the radio's
+codec, macOS showed no prompt, and nothing appeared in the Microphone list to
+switch on. The same server started from Terminal received audio.
 
-## Run it as a service
+## Run it at login
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kidvelvet/radio-web-remote/main/packaging/install.sh | sh -s -- --service
 ```
 
-This adds a LaunchAgent (`~/Library/LaunchAgents/`) that starts at login and
-restarts the server if it stops. Log: `~/Library/Logs/radio-web-remote.log`.
-Stop it with `launchctl bootout gui/$(id -u)/io.github.kidvelvet.radio-web-remote`
-(launchctl(1) on macOS).
+This writes `~/.local/opt/radio-web-remote/radio-web-remote.command` and opens
+it: a Terminal window that runs the server and restarts it if it stops.
+Allow Microphone access for Terminal if asked. To start it at every login,
+add that file under **System Settings > General > Login Items > Open at
+Login** (+). Close the window to stop the server. The Mac must stay logged
+in; set it not to sleep while it serves the radio.
 
 ## Uninstall
 

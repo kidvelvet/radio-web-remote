@@ -41,10 +41,10 @@ transmits in voice modes. Change it back for local operation.
 ### On the computer (macOS)
 
 Grant the server Microphone access: System Settings > Privacy & Security >
-Microphone, and turn on the app that runs the server (Terminal, or the
-LaunchAgent's program). Without it macOS hands the server silence from the
-radio's codec, so receive audio is silent even in listen-only mode
-(hardware test H7300-16).
+Microphone, and turn on the app that runs the server (Terminal). Without it
+macOS hands the server silence from the radio's codec, so receive audio is
+silent even in listen-only mode (hardware test H7300-16). A LaunchAgent
+cannot get this permission at all; see [install-macos.md](install-macos.md).
 
 In the browser's Audio panel, pick the microphone and speaker you mean to
 use. The system default may be another device (on the maintainer's Mac it

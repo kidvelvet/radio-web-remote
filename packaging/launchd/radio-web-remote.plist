@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  launchd LaunchAgent for radio-web-remote. install.sh service mode writes it
-  to ~/Library/LaunchAgents/ with @EXE@, @LABEL@ and @HOME@ filled in.
+  NOT USED BY THE INSTALLER. Under launchd, macOS gives the server silence
+  from every audio input, the radio's codec included, and shows no prompt
+  (tested on macOS 26 with an IC-9700, 2026-11-14; docs/install-macos.md).
+  Use this only for control without audio. install.sh runs the server in a
+  Terminal window instead.
+
+  launchd LaunchAgent for radio-web-remote. The install script's service
+  option writes it to ~/Library/LaunchAgents/ with the program path, label
+  and home folder filled in. (No placeholders in this comment: a path with a
+  double hyphen would make the comment invalid XML.)
 
   KeepAlive restarts the server if it exits: a key sent over CI-V survives
   the server dying (docs/hardware-test.md, H7300-4 C), and the server sends

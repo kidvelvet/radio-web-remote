@@ -44,5 +44,6 @@ a VPN.
 ### Setup
 
 - One-line install scripts for Linux, macOS and Windows, with a service
-  option (systemd, launchd, Task Scheduler); `radio-web-remote doctor`;
+  option (systemd user service, a Terminal login item on macOS, Task
+  Scheduler); `radio-web-remote doctor`;
   udev and Docker examples.

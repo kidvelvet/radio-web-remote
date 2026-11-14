@@ -24,7 +24,6 @@ SOURCE="${RWR_SOURCE:-$REPO/releases/download/v$VERSION/radio_web_remote-$VERSIO
 PREFIX="${RWR_PREFIX:-$HOME/.local/opt/radio-web-remote}"
 BIN="${RWR_BIN:-$HOME/.local/bin}"
 PY="${PYTHON:-python3}"
-LABEL="io.github.kidvelvet.radio-web-remote"
 OS="$(uname -s)"
 
 say() { printf '%s\n' "$*"; }
@@ -33,7 +32,7 @@ die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 service_files() {
     case "$OS" in
         Linux) printf '%s\n' "$HOME/.config/systemd/user/radio-web-remote.service" ;;
-        Darwin) printf '%s\n' "$HOME/Library/LaunchAgents/$LABEL.plist" ;;
+        Darwin) printf '%s\n' "$PREFIX/radio-web-remote.command" ;;
     esac
 }
 
@@ -46,8 +45,8 @@ remove_service() {
             rm -f "$f"
             systemctl --user daemon-reload 2>/dev/null || true ;;
         Darwin)
-            launchctl bootout "gui/$(id -u)" "$f" 2>/dev/null || true
-            rm -f "$f" ;;
+            rm -f "$f"
+            say "Also remove radio-web-remote.command from System Settings > General > Login Items." ;;
     esac
     say "Removed the service ($f)."
 }
@@ -66,15 +65,17 @@ install_service() {
             say "Service: systemctl --user status radio-web-remote"
             say "To keep it running when you are logged out:  sudo loginctl enable-linger $USER" ;;
         Darwin)
-            launchctl bootout "gui/$(id -u)" "$f" 2>/dev/null || true
-            sed -e "s|@EXE@|$exe|g" -e "s|@LABEL@|$LABEL|g" -e "s|@HOME@|$HOME|g" \
-                "$HERE/launchd/radio-web-remote.plist" > "$f" 2>/dev/null \
-                || write_launchd_plist "$exe" > "$f"
-            launchctl bootstrap "gui/$(id -u)" "$f"
-            say "Service: launchctl print gui/$(id -u)/$LABEL"
-            say "Log: ~/Library/Logs/radio-web-remote.log"
-            say "macOS asks for Microphone access the first time audio starts; allow it,"
-            say "or the radio's receive audio is silent (see docs/install-macos.md)." ;;
+            # Not a LaunchAgent: macOS gives a launchd service silence from every
+            # audio input, the radio's codec included, and never asks (tested
+            # on macOS 26, docs/install-macos.md). Terminal can hold Microphone
+            # permission, so the server runs in a Terminal window started at login.
+            write_command "$exe" > "$f"
+            chmod +x "$f"
+            open "$f"
+            say "Started the server in a Terminal window ($f)."
+            say "If Terminal asks for Microphone access, allow it (needed even to listen)."
+            say "To start it at login: System Settings > General > Login Items >"
+            say "Open at Login > + and choose $f" ;;
     esac
 }
 
@@ -95,21 +96,17 @@ WantedBy=default.target
 EOF
 }
 
-write_launchd_plist() {
+write_command() {
     cat <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>$1</string><string>serve</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>5</integer>
-  <key>StandardOutPath</key><string>$HOME/Library/Logs/radio-web-remote.log</string>
-  <key>StandardErrorPath</key><string>$HOME/Library/Logs/radio-web-remote.log</string>
-</dict>
-</plist>
+#!/bin/sh
+# radio-web-remote in a Terminal window (macOS). Restarts the server if it
+# stops: a key sent over CI-V survives the server dying, and the server
+# sends TX off first thing when it starts. Close this window to stop it.
+while true; do
+    "$1" serve
+    echo "radio-web-remote stopped (exit \$?); restarting in 3 s. Close this window to stop."
+    sleep 3
+done
 EOF
 }
 
