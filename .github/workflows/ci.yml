@@ -117,9 +117,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: PortAudio (Linux)
+      # PortAudio, plus a virtual sound card: the runner has no audio server,
+      # and doctor (rightly) fails when PortAudio cannot start.
+      - name: PortAudio and a virtual sound card (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y --no-install-recommends libportaudio2
+        run: |
+          sudo apt-get install -y --no-install-recommends libportaudio2 pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=ci_null
 
       - name: install.sh
         if: runner.os != 'Windows'
