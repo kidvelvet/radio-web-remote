@@ -76,6 +76,7 @@ def test_drag_tuning(page: Page, server):
     page.mouse.move(box["x"] + 40, y)
     page.mouse.down()
     page.mouse.move(box["x"] + 40 + 80, y, steps=10)  # 80 px = 10 steps of 100 Hz
+    page.wait_for_timeout(200)  # hold still before lifting: a drag, not a flick
     page.mouse.up()
     expect(page.locator("#freqtext")).to_have_text("14.201.000", timeout=5_000)
 

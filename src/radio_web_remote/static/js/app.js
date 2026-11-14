@@ -36,6 +36,7 @@ function buildBands(coverage) {
   }));
 }
 const PX_PER_STEP = 8;        // drag distance per tuning step
+const FLICK_STILL_MS = 80;    // pointer still this long before release: not a flick
 const SEND_EVERY_MS = 60;     // throttle for tune and level messages
 const STOP_TEXT = {
   released: "", connection_closed: "Connection lost: TX stopped.",
@@ -344,8 +345,10 @@ function wireTuning() {
     if (!app.dragging) return;
     app.dragging = false;
     f.classList.remove("dragging");
-    // Flick: keep tuning briefly in the flick direction, slowing down.
-    let v = velocity, pos = 0, base = current();
+    // Flick: keep tuning briefly in the flick direction, slowing down. Only if
+    // the pointer was still moving at release: drag, hold still, lift = no flick.
+    const stillFor = performance.now() - lastT;
+    let v = stillFor > FLICK_STILL_MS ? 0 : velocity, pos = 0, base = current();
     const tick = () => {
       v *= 0.92;
       pos += v * 16;
