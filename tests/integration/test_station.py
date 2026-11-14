@@ -294,3 +294,27 @@ async def test_band_change_refused_while_transmitting(bench9700):
             await st.swap_bands(ALICE)
     finally:
         await st.tx.ptt_up(ALICE)
+
+
+async def test_default_config_finds_a_radio_at_a_changed_address():
+    """auto_detect_address is on by default: an IC-705 set to 94 (H705-1) still connects."""
+    from radio_web_remote.radios.icom import IC705
+
+    b = Bench(IC705)
+    b.sim.address = 0x94
+    st = RadioStation(
+        RadioConfig(id="ic705", driver="icom.ic705"),
+        PttConfig(heartbeat_interval_s=0.1, heartbeat_timeout_s=0.5),
+        transport_factory=b.factory,
+        poll_interval_s=0.05,
+        lost_after_timeouts=2,
+        backoff_s=(0.05, 0.2),
+        response_timeout_s=0.1,
+        tx_watchdog_s=0.02,
+    )
+    await st.start()
+    try:
+        await wait_for(lambda: st.connected, timeout=5.0)
+        assert st.state.frequency_hz == b.sim.state.frequency_hz
+    finally:
+        await st.close()

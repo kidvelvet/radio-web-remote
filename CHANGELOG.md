@@ -14,6 +14,8 @@ a VPN.
   S, Po, SWR and ALC meters.
 - Spectrum scope and waterfall with tap to tune, all scope modes the model
   documents.
+- Finds a radio whose CI-V address was changed (broadcast read ID; on by
+  default, `auto_detect_address`).
 - IC-9700: MAIN and SUB selection, swap, Dualwatch, satellite mode
   indicator; the scope follows the selected band.
 

@@ -62,7 +62,7 @@ Menu paths are under **MENU > SET > Connectors** unless noted.
 
 | Setting | Set it to | Why | Default | Page |
 |---------|-----------|-----|---------|------|
-| CI-V > CI-V Address | **A4h**, or match `civ_address`, or set `auto_detect_address: true` | The maintainer's radio was set to 94h (the IC-7300's address, a tip in the Advanced Manual for older software) and did not answer at A4h | A4h | 8-16 |
+| CI-V > CI-V Address | **A4h**, or match `civ_address` (the server also finds a changed address by itself, `auto_detect_address`, on by default) | The maintainer's radio was set to 94h (the IC-7300's address, a tip in the Advanced Manual for older software) and did not answer at A4h | A4h | 8-16 |
 | CI-V > CI-V Transceive | **ON** | Front-panel changes reach the page at once | ON | 8-16 |
 | CI-V > CI-V USB Echo Back | either | The driver ignores echoes | OFF | 8-16 |
 | MOD Input > DATA OFF MOD | **MIC,USB** (default) or USB | Browser or host audio transmits in voice modes; MIC,USB keeps the radio's own mic working too | MIC,USB | 8-15 |

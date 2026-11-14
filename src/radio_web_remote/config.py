@@ -153,7 +153,9 @@ class RadioConfig(_Strict):
     # broadcast); the radio menu decides which values it actually accepts.
     civ_address: Annotated[int, Field(ge=0x01, le=0xFB)] | None = None
     controller_address: Annotated[int, Field(ge=0x01, le=0xFB)] = 0xE0
-    auto_detect_address: bool = False
+    # Silent at civ_address? Find the radio by one broadcast read ID and use
+    # the address that answers (a menu setting or PRESET can change it, H705-1).
+    auto_detect_address: bool = True
     ptt_method: Literal["civ", "dtr", "rts"] = "civ"
     audio: RadioAudioConfig = Field(default_factory=RadioAudioConfig)
 

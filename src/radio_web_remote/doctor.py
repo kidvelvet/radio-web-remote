@@ -358,7 +358,8 @@ async def check_radio(
             "warn",
             t,
             f"the radio answered at CI-V address {address:02X}, not {wanted:02X}",
-            f'Set civ_address: "{address:02X}" for {rc.id} (or auto_detect_address: true).',
+            f'Set civ_address: "{address:02X}" for {rc.id} (auto_detect_address finds it '
+            "at each start, but a wrong address costs a timeout first).",
         )
     if not rc.audio.enabled:
         report.add("info", t, "radio audio disabled in config")

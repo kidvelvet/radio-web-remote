@@ -14,7 +14,8 @@ the running server first so doctor can talk to the radio.
 
 - **Wrong CI-V address.** The radio's address is a menu setting and a PRESET
   can change it (IC-705). doctor finds the real address with a broadcast and
-  tells you what to put in `civ_address`, or set `auto_detect_address: true`.
+  tells you what to put in `civ_address`. The server also finds it by itself
+  at start (`auto_detect_address`, on by default) and logs the value to set.
   One maintainer's IC-705 was set to 94, the IC-7300's address (H705-1).
 - **Wrong port.** The IC-705 and IC-9700 each have two serial ports; only
   port A carries CI-V. Match the radio by `usb_serial` and the server picks
