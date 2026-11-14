@@ -298,6 +298,8 @@ def _pair_problem(cert_file: Path, key_file: Path) -> str | None:
     try:
         cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
         key = serialization.load_pem_private_key(key_file.read_bytes(), password=None)
+    except PermissionError:
+        return "not readable by this account (check the files' owner)"
     except (OSError, ValueError) as exc:
         return f"unreadable ({exc})"
     except TypeError:  # cryptography: the key is encrypted
@@ -307,6 +309,25 @@ def _pair_problem(cert_file: Path, key_file: Path) -> str | None:
         serialization.Encoding.DER, pub
     ) != key.public_key().public_bytes(serialization.Encoding.DER, pub):
         return "key does not match the certificate"
+    return None
+
+
+def local_ca_problem(d: Path) -> str | None:
+    """Why the local CA in this tls folder cannot be used, or None (also when
+    there is none yet and nothing it issued: the first run makes one)."""
+    reset = (
+        "restore it from a backup, or run 'radio-web-remote cert reset' "
+        "(every device must then install the new CA from /setup)"
+    )
+    have = {n: (d / n).exists() for n in ("ca.crt", "ca.key")}
+    if not any(have.values()):
+        if (d / "server.crt").exists():
+            return f"the local CA (ca.crt and ca.key) is missing from {d}; {reset}"
+        return None
+    if missing := [n for n, ok in have.items() if not ok]:
+        return f"local CA file {d / missing[0]} is missing; {reset}"
+    if problem := _pair_problem(d / "ca.crt", d / "ca.key"):
+        return f"local CA in {d}: {problem}; {reset}"
     return None
 
 
@@ -341,13 +362,12 @@ def ensure_certificates(cfg: Config, data_dir: Path) -> tuple[TlsFiles, str | No
     d = tls_dir(data_dir)
     changed: list[str] = []
     sans = wanted_sans(cfg)
-    have = [(d / n).exists() for n in ("ca.crt", "ca.key")]
-    if not any(have):
+    if problem := local_ca_problem(d):
+        # Not repaired silently: a new CA means every device must install it again.
+        raise ConfigError(problem)
+    if not (d / "ca.crt").exists():
         create_ca(d, cfg.site.club_name, sans)
         changed.append("created local CA")
-    elif problem := "file missing" if not all(have) else _pair_problem(d / "ca.crt", d / "ca.key"):
-        # Not repaired silently: a new CA means every device must install it again.
-        raise ConfigError(f"local CA {problem}; run 'radio-web-remote cert reset'")
     outside = uncovered_by_ca(d / "ca.crt", sans)
     if outside:
         # Issuing them would give clients a certificate they must reject.

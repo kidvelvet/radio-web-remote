@@ -459,16 +459,15 @@ class Hub:
                         # A repeat while the first press waits: its refusal answers this one.
                         conn.press_msg["press"] = msg.get("press")
                         continue
-                    if not conn.control.idle.is_set() or station.tx.press_may_wait:
-                        # A key waits for controls sent before it (a power or band
-                        # change), a retune or a TX off, off this loop: a release
-                        # must still be read meanwhile.
-                        conn.press_waiting = True
-                        conn.press_msg = msg
-                        conn.press = asyncio.create_task(self._press(conn, station, msg))
-                        conn.press.add_done_callback(functools.partial(self._helper_done, conn))
-                        continue
-                elif kind == "ptt" or (kind == "visibility" and msg.get("hidden") is True):
+                    # Off this loop: a key may wait (for controls sent before it, a
+                    # retune, a TX off, the transmit-frequency read), and a release
+                    # or a logout must still be read and cancel it meanwhile.
+                    conn.press_waiting = True
+                    conn.press_msg = msg
+                    conn.press = asyncio.create_task(self._press(conn, station, msg))
+                    conn.press.add_done_callback(functools.partial(self._helper_done, conn))
+                    continue
+                if kind == "ptt" or (kind == "visibility" and msg.get("hidden") is True):
                     await self._settle_press(conn)  # a release lands after its press
                 await self._handle(conn, station, msg)
             elif not conn.control.put(msg):
@@ -561,10 +560,12 @@ class Hub:
                     "span": lambda v: type(v) is int,
                     "edge": lambda v: type(v) is int and v in (1, 2, 3, 4),
                     "hold": lambda v: isinstance(v, bool),
-                    "ref": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
+                    "ref": lambda v: (
+                        isinstance(v, int | float) and not isinstance(v, bool) and -20 <= v <= 20
+                    ),
                     "speed": lambda v: v in ("fast", "mid", "slow"),
                 }
-                if name not in checks or not checks[name](value):
+                if type(name) is not str or name not in checks or not checks[name](value):
                     raise ValueError("bad scope setting")
                 await station.set_scope_setting(op, str(name), value)
             elif kind == "visibility":
@@ -605,7 +606,7 @@ class Hub:
             conn.push({"type": "error", "code": "control_denied", "message": str(exc)})
         except RadioError as exc:
             conn.push({"type": "error", "code": "radio", "message": str(exc)})
-        except (ValueError, TypeError, OverflowError) as exc:  # wrong value types from a client
+        except ValueError as exc:
             conn.push({"type": "error", "code": "bad_request", "message": str(exc)})
 
 

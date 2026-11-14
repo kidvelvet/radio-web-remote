@@ -353,3 +353,15 @@ async def test_an_ng_to_a_slow_item_does_not_drop_the_link(bench):
         assert not st.state.tx.unkey_unconfirmed
     finally:
         await st.tx.ptt_up(ALICE)
+
+
+async def test_scope_output_turned_off_after_reconnect_with_no_viewers(bench):
+    """Review B5-2: the radio may still be streaming after a link loss."""
+    await bench.station.set_scope_demand(True)
+    assert bench.sim.state.scope_output
+    links = len(bench.links)
+    bench.host.on_error(OSError("cable glitch"))
+    await wait_for(lambda: not bench.station.state.connected)
+    await bench.station.set_scope_demand(False)  # the last viewer left meanwhile
+    await wait_for(lambda: bench.station.state.connected and len(bench.links) > links)
+    await wait_for(lambda: not bench.sim.state.scope_output)

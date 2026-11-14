@@ -185,9 +185,19 @@ def create_app(
             del throttle[next(iter(throttle))]
         audit_capped(event, ip=ip, suppressed=suppressed, **fields)  # many keys: capped too
 
+    def flush_throttled(final: bool = False) -> None:
+        """Write the counts a quiet key would otherwise never report."""
+        now = time.monotonic()
+        for k, (last, suppressed) in list(throttle.items()):
+            if suppressed and (final or now - last >= AUDIT_THROTTLE_S):
+                event, key = k.split("|", 1)
+                throttle[k] = (last, 0)
+                audit_capped(f"{event}_suppressed", key=key, count=suppressed)
+
     async def flush_caps_every_minute() -> None:
         while True:  # a count is written soon after a flood ends, not at the next event
             await asyncio.sleep(60)
+            flush_throttled()
             flush_caps(int(time.monotonic() // 60))
 
     @asynccontextmanager
@@ -201,7 +211,8 @@ def create_app(
             yield
         finally:
             flusher.cancel()
-            flush_caps(int(time.monotonic() // 60) + 1)  # the last minute's counts
+            flush_throttled(final=True)  # the last minute's counts
+            flush_caps(int(time.monotonic() // 60) + 1)
             await ctx.hub.close()
             if start_stations:
                 for st in stations.values():

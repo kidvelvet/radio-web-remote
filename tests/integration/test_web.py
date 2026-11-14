@@ -823,3 +823,27 @@ def test_refusal_names_its_press_and_bad_types_are_refused(env):
             ws.send_json(bad)
             assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"
         ws.send_json({"type": "heartbeat"})  # still open
+
+
+def test_release_during_the_transmit_frequency_read_never_keys(env):
+    """Review C5-1: every press waits as a task, so a release sent during a slow
+    transmit-frequency read cancels it."""
+    import asyncio
+
+    station, sim = env["station"], env["sim"]
+
+    async def slow_hz():
+        await asyncio.sleep(0.6)  # a lost answer and its retry
+        return 14_074_000
+
+    station.tx._tx_frequency = slow_hz
+    c = env["client"]
+    login(c)
+    with wsc(c, "/ws") as ws:
+        ws.receive_json()
+        before = list(sim.tx_history)
+        ws.send_json({"type": "ptt", "down": True, "press": 1})
+        ws.send_json({"type": "ptt", "down": False})
+        ws.send_json({"type": "heartbeat"})
+        time.sleep(1.0)
+        assert True not in sim.tx_history[len(before) :]

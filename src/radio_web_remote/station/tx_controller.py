@@ -172,6 +172,7 @@ class TxController:
         self._unkey_failures = 0
         self._unconfirmed_since = 0.0
         self._unkey_tasks: set[asyncio.Task[None]] = set()
+        self._pressing = False  # a press is reading the transmit frequency
         self._last_unkey_try = 0.0
         self._closed = False
         self._must_release: set[str] = set()
@@ -227,11 +228,6 @@ class TxController:
                 log.exception("TX status listener failed")
 
     # -- client events -----------------------------------------------------
-    @property
-    def press_may_wait(self) -> bool:
-        """A press now would wait (for a retune or a TX off) before keying."""
-        return self._key_lock.locked() or bool(self._unkey_tasks)
-
     async def ptt_down(self, op: Operator, on_commit: Callable[[], None] | None = None) -> None:
         """Key for this operator, or raise TxDenied. on_commit runs once the press
         is committed (the holder is set): until then cancelling it is safe."""
@@ -256,6 +252,9 @@ class TxController:
                     self._last_heartbeat = self._clock()
                     return  # already holding; a repeated press is a heartbeat
                 raise TxDenied(DenyReason.HELD_BY_OTHER, holder.callsign)
+            # No TX-off retry may start during this read: its TX off could land
+            # after this press's key (the holder is set synchronously after it).
+            self._pressing = True
             try:
                 hz = await self._read_tx_hz()
             except RadioError as exc:
@@ -264,6 +263,8 @@ class TxController:
                         DenyReason.RADIO_ERROR, f"could not read the transmit frequency: {exc}"
                     ) from exc
                 hz = self._frequency()  # no band limits: the displayed one is fine for the log
+            finally:
+                self._pressing = False
             if not op.limits.allows_frequency(hz):
                 raise TxDenied(DenyReason.OUT_OF_LIMITS, f"{hz} Hz is outside this user's bands")
             if not op.limits.allows_power(self._power()):
@@ -478,6 +479,7 @@ class TxController:
             self._unkey_pending
             and now - self._last_unkey_try >= UNKEY_RETRY_S
             and not self._unkey_tasks  # one at a time; a new key waits for it
+            and not self._pressing
         ):
             await asyncio.shield(self._spawn_unkey())
 

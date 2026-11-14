@@ -69,6 +69,10 @@ COMMAND_RETRIES = 1  # resend once on timeout (not for 07 B0 swap, which is not 
 LATE_REPLY_DRAIN_S = 0.05  # after a timeout, swallow a late FB/FA before the next command
 
 
+class _Overtaken(RadioTimeout):
+    """A command failed so that TX off could go first."""
+
+
 class _Pending:
     __slots__ = ("expect_prefix", "future")
 
@@ -130,6 +134,9 @@ class IcomCivDriver(RadioDriver):
         self._pending: _Pending | None = None
         self._ptt_generation = 0
         self._last_ptt_was_key = False
+        self._unkeys_running = 0
+        self._unkeys_idle = asyncio.Event()  # no TX off is being confirmed
+        self._unkeys_idle.set()
         spec = model.scope
         self.scope = sc.ScopeAssembler(spec.points, spec.max_value) if spec else None
         # 27 1x selector byte: the scope's band (00 MAIN / 01 SUB). Always 00 on
@@ -316,13 +323,17 @@ class IcomCivDriver(RadioDriver):
     ) -> Frame:
         self._require(command)
         for attempt in range(retries + 1):
+            overtaken = False
             async with self._bus.acquire(priority):
                 try:
                     return await self._exchange(command, payload, expect_reply)
-                except RadioTimeout:
+                except RadioTimeout as exc:
                     if attempt == retries:
                         raise
+                    overtaken = isinstance(exc, _Overtaken)
                     log.debug("%s timed out, retrying", command.name)
+            if overtaken:  # retried once the TX off confirmed, not in its way
+                await self._unkeys_idle.wait()
         raise AssertionError("unreachable")
 
     def _require(self, command: CivCommand) -> None:
@@ -561,6 +572,16 @@ class IcomCivDriver(RadioDriver):
         Returns False only if a newer key took over before RX was seen. A newer
         unkey wants the same thing, so this one keeps confirming.
         """
+        self._unkeys_running += 1
+        self._unkeys_idle.clear()
+        try:
+            return await self._unkey_confirm(verify)
+        finally:
+            self._unkeys_running -= 1
+            if not self._unkeys_running:
+                self._unkeys_idle.set()
+
+    async def _unkey_confirm(self, verify: bool) -> bool:
         self._require(CivCommand.TX_STATE)
         self._ptt_generation += 1
         self._last_ptt_was_key = False
@@ -577,8 +598,19 @@ class IcomCivDriver(RadioDriver):
             # bus, the read-back still gets time to hear the radio answer RX.
             return max(LATE_REPLY_DRAIN_S, min(self.timeout, cap, deadline - loop.time()))
 
+        def fail_stuck() -> None:
+            # The command in flight is stuck (its reply lost). Fail it now: this
+            # TX off, already queued first for the bus, then gets it at once.
+            log.warning("bus busy for %.0f ms; overtaking it with TX off", UNKEY_BUS_WAIT_S * 1000)
+            stuck, self._pending = self._pending, None
+            if stuck is not None and not stuck.future.done():
+                stuck.future.set_exception(_Overtaken(f"{self.model.name}: overtaken by TX off"))
+
+        timer = loop.call_later(UNKEY_BUS_WAIT_S, fail_stuck)
         try:
-            async with self._bus.acquire(Priority.URGENT, wait_s=UNKEY_BUS_WAIT_S):
+            # Queued once, so nothing that queues meanwhile goes ahead of it.
+            async with self._bus.acquire(Priority.URGENT, wait_s=2 * UNKEY_BUS_WAIT_S):
+                timer.cancel()
                 # A missing FB, an FA (possibly a late one for an earlier command)
                 # or a link error: the read-back below decides, and resends. Its
                 # FB is not waited for longer than a resend interval.
@@ -586,26 +618,12 @@ class IcomCivDriver(RadioDriver):
                     await self._exchange(
                         CivCommand.TX_STATE, payload, False, wait_s=budget(UNKEY_RESEND_S)
                     )
-        except TimeoutError:
-            # The command in flight is stuck. Do not wait for it: send TX off now,
-            # and do not let its FB complete the stuck command as if acknowledged.
-            log.warning("bus busy for %.0f ms; sending TX off anyway", UNKEY_BUS_WAIT_S * 1000)
-            # Fail the stuck command now and queue first for the bus (queueing is
-            # synchronous), ahead of its retry: the read-back below then gets the
-            # bus at once instead of after the stuck command's full timeout.
-            stuck, self._pending = self._pending, None
-            if stuck is not None and not stuck.future.done():
-                stuck.future.set_exception(RadioTimeout(f"{self.model.name}: overtaken by TX off"))
-            try:
-                async with self._bus.acquire(Priority.URGENT, wait_s=UNKEY_BUS_WAIT_S):
-                    with contextlib.suppress(RadioError):
-                        await self._exchange(
-                            CivCommand.TX_STATE, payload, False, wait_s=budget(UNKEY_RESEND_S)
-                        )
-            except TimeoutError:  # still stuck: write TX off past it
-                self._pending = None
-                with contextlib.suppress(OSError):
-                    await self.transport.send_urgent(self._frame(payload))
+        except TimeoutError:  # still not free: write TX off past whatever holds it
+            self._pending = None
+            with contextlib.suppress(OSError):
+                await self.transport.send_urgent(self._frame(payload))
+        finally:
+            timer.cancel()
         if not verify:
             return True
         last_send = loop.time()

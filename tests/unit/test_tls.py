@@ -236,3 +236,18 @@ def test_foreign_server_certificate_is_reissued(tmp_path):
     )
     _files, changed = tls.ensure_certificates(cfg, tmp_path)
     assert changed and "no names" in changed
+
+
+def test_ca_gone_but_its_server_certificate_left_is_not_replaced_silently(tmp_path):
+    """Review E5-1, E5-2: a new CA breaks every device; say so, name the files."""
+    from radio_web_remote.config import ConfigError
+
+    cfg = Config()
+    tls.ensure_certificates(cfg, tmp_path)
+    d = tls.tls_dir(tmp_path)
+    (d / "ca.key").unlink()
+    with pytest.raises(ConfigError, match=r"ca\.key is missing; restore it from a backup"):
+        tls.ensure_certificates(cfg, tmp_path)
+    (d / "ca.crt").unlink()
+    with pytest.raises(ConfigError, match="is missing from"):
+        tls.ensure_certificates(cfg, tmp_path)

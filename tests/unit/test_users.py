@@ -200,3 +200,18 @@ def test_flood_of_names_does_not_unlock_a_locked_one(store, monkeypatch):
             store.verify_login(f"flood{n}", "wrong password here")
     with pytest.raises(LockedOut):
         store.verify_login("victimname", "wrong password here")
+
+
+def test_integrity_check_sees_damage_beyond_the_users_table(tmp_path):
+    """Review C5-4: damage anywhere in the file stops the start, not just in users."""
+    s = u.UserStore(tmp_path / "users.db")
+    user = s.create_user("alice", "a-good-password-123", u.Role.OPERATOR, "N0CALL")
+    for _ in range(50):
+        s.create_session(user)
+    assert s.integrity_problem() is None
+    raw = bytearray((tmp_path / "users.db").read_bytes())
+    page = 4096
+    for n in range(2, len(raw) // page):  # every page after the schema
+        raw[n * page : n * page + 64] = b"\xff" * 64
+    (tmp_path / "users.db").write_bytes(bytes(raw))
+    assert s.integrity_problem()

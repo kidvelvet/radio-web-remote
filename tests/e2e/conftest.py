@@ -93,16 +93,16 @@ def server(tmp_path_factory):
         stderr=subprocess.STDOUT,
         text=True,
     )
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
+    deadline, started = time.monotonic() + 30, False
+    while not started and proc.poll() is None and time.monotonic() < deadline:
         with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), 0.2):
-            break
-        if proc.poll() is not None:
-            raise RuntimeError((d / "server.log").read_text())
+            started = True
         time.sleep(0.1)
-    else:
+    if not started:
         proc.kill()
-        raise RuntimeError("server did not start")
+        proc.wait(10)
+        log.close()
+        raise RuntimeError("server did not start:\n" + (d / "server.log").read_text())
     yield {"url": f"https://localhost:{port}", "password": pw, "dir": d}
     proc.terminate()
     try:

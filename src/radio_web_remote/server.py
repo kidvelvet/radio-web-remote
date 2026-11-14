@@ -68,7 +68,9 @@ def _real_audio(
 def build_runtime(cfg: Config, data_dir: Path, simulate: bool = False) -> Runtime:
     try:
         users = UserStore(users_db(data_dir))
-        admins = users.count_admins()  # reads data pages too: damage shows here
+        if problem := users.integrity_problem():  # every table, sessions included
+            raise sqlite3.DatabaseError(problem)
+        admins = users.count_admins()
     except sqlite3.OperationalError:
         raise  # locked or busy: may pass, so a restart is right
     except sqlite3.DatabaseError as exc:  # not a database, corrupt: a restart cannot fix it

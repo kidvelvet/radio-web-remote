@@ -191,6 +191,17 @@ class UserStore:
             rows = db.execute("SELECT * FROM users ORDER BY username").fetchall()
         return [self._row_to_user(r) for r in rows]
 
+    def integrity_problem(self) -> str | None:
+        """What `PRAGMA quick_check` finds wrong in the whole file, or None."""
+        try:
+            with self._db() as db:
+                rows = [r[0] for r in db.execute("PRAGMA quick_check").fetchall()]
+        except sqlite3.OperationalError:
+            raise  # locked or busy, not damage
+        except sqlite3.DatabaseError as exc:  # too damaged to check
+            return str(exc)
+        return None if rows == ["ok"] else "; ".join(rows[:3])
+
     def count_admins(self) -> int:
         with self._db() as db:
             row = db.execute(

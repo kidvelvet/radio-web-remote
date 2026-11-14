@@ -127,7 +127,7 @@ def check_config(
 def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
     t = "Accounts and certificates"
     from radio_web_remote.security.tls import (
-        _pair_problem,
+        local_ca_problem,
         needs_new_server_cert,
         tls_dir,
         uncovered_by_ca,
@@ -178,23 +178,9 @@ def check_data(report: Report, cfg: Config, data_dir: Path) -> None:
         report.add("warn", t, f"server certificate will be re-issued at start: {reason}")
     else:
         report.add("ok", t, f"server certificate covers {sans.describe()}")
-    ca = [(d / n).exists() for n in ("ca.crt", "ca.key")]
-    ca_problem = (
-        _pair_problem(d / "ca.crt", d / "ca.key")
-        if all(ca)
-        else "file missing"
-        if any(ca)
-        else None
-    )
-    if ca_problem:  # serve refuses to start with this
-        report.add(
-            "fail",
-            t,
-            f"local CA: {ca_problem}",
-            "Restore ca.crt and ca.key from a backup, or run `radio-web-remote cert reset` "
-            "and reinstall the CA on each device from /setup.",
-        )
-    elif all(ca):
+    if ca_problem := local_ca_problem(d):  # serve refuses to start with this
+        report.add("fail", t, ca_problem)
+    elif (d / "ca.crt").exists():
         missing = uncovered_by_ca(d / "ca.crt", sans)
         if missing:
             report.add(

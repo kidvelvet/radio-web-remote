@@ -446,3 +446,57 @@ E4-1, E4-3). (T) = regression test added, failing before the fix.
 **Tests**: the browser-test server's log went to a pipe nobody read; at
 64 KB (reached by the end of a CI run after round 3 added tests) the server
 blocked and the last WebKit test timed out in CI. It now logs to a file.
+
+### Round 5 (2026-11-14): 201 lines changed of 9,443 = 2.1%: continue
+
+Five fresh reviewers. 13 findings, all fixed. Four came from round-4 changes
+(B5-1, C5-1, C5-2, A5-1). (T) = regression test added, failing before the
+fix; (P) = confirmed with the reviewer's browser probe.
+
+**PTT and transmit safety**
+
+- D5-1 (P): the page took another operator's stop (time limit, hidden page)
+  as its own while its press was in flight; the server then keyed that press
+  with the page showing it released and sending no audio. The page now acts
+  only on the stop of a transmission it showed as its own.
+- C5-1 (T): a press that did not have to wait for anything still ran inline,
+  so a release during its transmit-frequency read (IC-705, IC-9700) was read
+  after the key, and a logout could not cancel it. Every press now waits as
+  a cancellable task.
+- C5-2: round 4's catch of TypeError and OverflowError for bad client values
+  also hid server bugs, including one after a key (the radio stayed keyed
+  with no error). Bad values are now checked where they arrive and only
+  ValueError is reported as a bad request; anything else closes the
+  connection, which unkeys.
+- B5-1 (T): with round 4's change, a TX-off retry could start during a
+  press's transmit-frequency read and land its TX off after the key (the
+  radio unkeyed under a holder shown as on air). No retry starts during that
+  read.
+- A5-1 (T): TX off now keeps its place in the bus queue while it waits for a
+  stuck command; an urgent read queued meanwhile went out first.
+- A5-2 (T): a command failed so that TX off could go first now retries only
+  after the TX off is confirmed, not in the read-back's way.
+
+**Station**
+
+- B5-2 (T): after a reconnect or restart with no viewers, the radio could
+  keep streaming scope data nobody watched (about 2.7 KB/s); the scope state
+  is unknown after connect and is set either way.
+- A5-3: the simulator keeps its span when it refuses a new one.
+
+**Web server and security**
+
+- C5-3: per-address audit counts for a key that went quiet were never
+  written; they are flushed every minute and at shutdown.
+- C5-4 (T): the start check now runs SQLite's quick check over the whole user
+  database (a damaged sessions table passed and made every login fail).
+
+**Setup and tooling**
+
+- E5-1 (T): with both CA files gone but the server certificate they issued
+  still there, `serve` made a new CA without a word and doctor said ok; both
+  now stop and say so. `serve` and doctor share one check.
+- E5-2 (T): the CA messages name the missing file and offer restoring from a
+  backup before `cert reset`; an unreadable file says to check its owner.
+- E5-3: the e2e fixture shows the server log when the server does not start,
+  and stops it.

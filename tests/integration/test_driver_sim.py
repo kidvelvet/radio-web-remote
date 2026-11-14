@@ -1,6 +1,7 @@
 """IcomCivDriver against the in-process simulator (runs on every OS)."""
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -433,3 +434,61 @@ async def test_unkey_after_a_stuck_poll_gets_several_read_backs(rig):
     assert await driver.unkey() is True
     assert not sim.state.transmitting
     assert await poll  # the overtaken poll is retried and answered
+
+
+# -- review round 5 ------------------------------------------------------------
+
+
+async def test_tx_off_keeps_its_place_ahead_of_later_urgent_reads(rig):
+    """Review A5-1: an urgent read queued while TX off waits for a stuck command
+    must not go out before it."""
+    driver, sim, _ = rig
+    driver.timeout = 0.5
+    original = sim._handle
+    lost = {"poll": 1}
+
+    def lose(frame, now):
+        if lost["poll"] and frame.payload == b"\x03":
+            lost["poll"] -= 1
+            return None
+        return original(frame, now)
+
+    await driver.key()
+    sim._handle = lose
+    start = len(sim.received)
+    poll = asyncio.create_task(driver.get_frequency())
+    await asyncio.sleep(0.01)
+    unkey = asyncio.create_task(driver.unkey())
+    await asyncio.sleep(0.02)  # inside unkey's wait for the stuck poll
+    read = asyncio.create_task(driver.get_ptt())
+    assert await unkey is True
+    await read
+    await poll
+    sent = [f.payload for f in sim.received[start:]]
+    assert sent.index(b"\x1c\x00\x00") < sent.index(b"\x1c\x00")
+
+
+async def test_overtaken_command_retries_after_the_tx_off(rig):
+    """Review A5-2: the overtaken command's retry must not hold the bus while
+    the TX off is being confirmed."""
+    driver, sim, _ = rig
+    driver.timeout = 0.5
+    original = sim._handle
+    lost = {"poll": 2}
+
+    def lose(frame, now):
+        if lost["poll"] and frame.payload == b"\x03":
+            lost["poll"] -= 1
+            return None
+        return original(frame, now)
+
+    await driver.key()
+    sim._handle = lose
+    poll = asyncio.create_task(driver.get_frequency())
+    await asyncio.sleep(0.01)
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    assert await driver.unkey() is True
+    assert loop.time() - t0 < 0.3
+    with contextlib.suppress(Exception):
+        await poll

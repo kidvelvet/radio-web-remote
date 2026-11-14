@@ -423,3 +423,28 @@ async def test_tx_off_retry_is_not_starved_by_retunes(rig):
     async with rig.tx.retune_guard(ALICE, 14_100_000):
         await rig.tx._check()
     assert not rig.tx._unkey_pending  # retried and confirmed
+
+
+async def test_tx_off_retry_does_not_start_during_a_press(rig):
+    """Review B5-1: a retry started while a press reads the transmit frequency
+    could land its TX off after the press's key."""
+    rig.tx._unkey_pending = True
+    rig.tx._unkey_failures = 1
+    rig.tx._last_unkey_try = -1e9
+    read = rig.tx._read_tx_hz
+
+    async def read_then_tick():
+        hz = await read()
+        ticks.append(asyncio.ensure_future(rig.tx._check()))  # the watchdog, same pass
+        await asyncio.sleep(0)
+        return hz
+
+    ticks: list[asyncio.Future[None]] = []
+
+    rig.tx._read_tx_hz = read_then_tick
+    rig.sim.tx_history.clear()
+    await rig.tx.ptt_down(ALICE)
+    await asyncio.gather(*ticks)
+    await asyncio.sleep(0.1)  # a TX off the tick started would be out by now
+    assert rig.sim.state.transmitting and rig.sim.tx_history == [True]
+    await rig.tx.ptt_up(ALICE)

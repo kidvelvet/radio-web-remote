@@ -48,7 +48,7 @@ const STOP_TEXT = {
 
 const app = {
   me: null, ws: null, hello: null, state: null, retry: 500,
-  heartbeat: null, ptt: false, pressed: false, serverStop: false, pressId: 0, dragging: false, activeLevel: null,
+  heartbeat: null, ptt: false, pressed: false, serverStop: false, pressId: 0, onAir: false, dragging: false, activeLevel: null,
   pendingHz: null, lastSent: 0, sendTimer: null, wakeLock: null,
   scope: null, scopeOn: false,
   audio: null, audioMode: null, rxStats: null, txLevel: null,
@@ -113,6 +113,7 @@ function connect() {
   ws.onclose = (ev) => {
     stopHeartbeat();
     localPtt(false);
+    app.onAir = false;
     setLink("down");
     $("ptt").disabled = true;
     if ($("txbar").dataset.state !== "danger") {  // the last state shown is no longer known
@@ -254,11 +255,14 @@ function renderTx(s, prev) {
   // The server stopped our transmission (timeout, heartbeat, limits...): say why.
   // A stop the server made (timeout, limits); not the late echo of our own
   // release, which can arrive after a newer press is already in effect.
-  if (app.ptt && prev?.tx?.transmitting && !tx.transmitting && tx.last_stop !== "released") {
+  // Only our own transmission: another operator's stop must not drop a press
+  // of ours that the server is about to key.
+  if (app.ptt && app.onAir && !tx.transmitting && tx.last_stop !== "released") {
     localPtt(false);
     app.serverStop = true;
     showMsg(STOP_TEXT[tx.last_stop] ?? "TX stopped.");
   }
+  app.onAir = !!mine;
 }
 
 function buildModes(modes) {

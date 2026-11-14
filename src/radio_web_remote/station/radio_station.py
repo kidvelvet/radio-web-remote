@@ -160,7 +160,7 @@ class RadioStation:
         self._listeners: list[StateListener] = []
         self._scope_listeners: list[ScopeListener] = []
         self._scope_wanted = False
-        self._scope_applied = False  # what the radio was last told successfully
+        self._scope_applied: bool | None = None  # last told successfully; None = unknown
         self._scope_failed = False
         self._scope_retry_at = 0.0
         self._task: asyncio.Task[None] | None = None
@@ -302,7 +302,8 @@ class RadioStation:
             scope_edges=driver.scope_edges(),
             coverage_hz=driver.coverage_hz(),
         )
-        self._scope_applied = self._scope_failed = False
+        # Unknown after a reconnect or restart (it may still be streaming): say it.
+        self._scope_applied, self._scope_failed = None, False
         await self._apply_scope(driver)  # re-apply after a reconnect
         slow = self._slow_items(driver)
         timeouts = 0
