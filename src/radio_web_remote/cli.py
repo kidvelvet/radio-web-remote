@@ -5,6 +5,7 @@ P0 commands:
   drivers        list registered radio drivers
   sim            run a simulated radio on a pseudo-terminal (Linux, macOS)
   probe          read frequency, mode and TX state from a radio (sends TX off first)
+  doctor         check this computer, the config and each radio; print what to fix
 """
 
 from __future__ import annotations
@@ -245,6 +246,12 @@ def _cmd_cert(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from radio_web_remote import doctor
+
+    return doctor.main(args.config, _data_dir(args), args.skip_radio)
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import logging
 
@@ -340,6 +347,13 @@ def build_parser() -> argparse.ArgumentParser:
     aud_sub.add_parser("devices", help="list audio devices and their indexes").set_defaults(
         func=_cmd_audio_devices
     )
+
+    doc = sub.add_parser(
+        "doctor", help="check ports, audio, config and each radio; print what to fix"
+    )
+    common(doc)
+    doc.add_argument("--skip-radio", action="store_true", help="do not talk to the radios")
+    doc.set_defaults(func=_cmd_doctor)
 
     srv = sub.add_parser("serve", help="run the HTTPS server")
     common(srv)

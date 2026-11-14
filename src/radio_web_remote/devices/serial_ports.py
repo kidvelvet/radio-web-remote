@@ -57,7 +57,7 @@ def _pick(hits: list[PortInfo], match: SerialMatch, what: str) -> str:
     # macOS names both IC-705 ports "IC-705"; port A sorted first there
     # (cu.usbmodem...01 vs ...03, H705-1). TODO(verify) on Linux and Windows.
     chosen = sorted(p.device for p in hits)[0]
-    log.warning(
+    log.info(  # expected for an IC-705 on macOS; not worth a warning on every start
         "%s matches %d serial ports (%s); using %s. Set match.port to choose another.",
         what,
         len(hits),
