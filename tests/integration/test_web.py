@@ -2,6 +2,7 @@
 
 import json
 import time
+from unittest.mock import patch
 
 import pytest
 from argon2 import PasswordHasher
@@ -625,3 +626,49 @@ def test_state_reports_audio(env):
             ws, lambda m: m.get("type") == "state" and m["state"]["audio"].get("available")
         )
         assert st["state"]["audio"]["host_mode"] is True
+
+
+def barrier(ws):
+    """Messages are handled in order: once this error comes back, earlier ones were handled."""
+    ws.send_json({"type": "launch_missiles"})
+    recv_until(ws, lambda m: m["type"] == "error")
+
+
+DIAG = {
+    "frames": 250,
+    "lost": 0,
+    "late": 0,
+    "max_gap_ms": 40,
+    "max_lag_ms": 12,
+    "gaps": 0,
+    "skips": 0,
+    "target_ms": 80,
+}
+
+
+def test_audio_diag_logged_only_when_unhealthy(env, caplog):
+    c = env["client"]
+    login(c)
+    caplog.set_level("INFO", logger="radio_web_remote.web.hub")
+    with wsc(c, "/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "audio_diag", **DIAG})
+        barrier(ws)
+        assert "audio receive" not in caplog.text
+        with patch("radio_web_remote.web.hub._now", return_value=1e9):
+            ws.send_json({"type": "audio_diag", **DIAG, "late": 3, "max_gap_ms": 420})
+            barrier(ws)
+    assert "late 3" in caplog.text and "max_gap_ms 420" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "bad", [{"late": -1}, {"late": "3"}, {"gaps": True}, {"frames": None}, {"lost": 10**8}]
+)
+def test_audio_diag_rejects_bad_fields(env, bad):
+    c = env["client"]
+    login(c)
+    with wsc(c, "/ws") as ws:
+        ws.receive_json()
+        with patch("radio_web_remote.web.hub._now", return_value=1e9):
+            ws.send_json({"type": "audio_diag", **DIAG, **bad})
+            assert recv_until(ws, lambda m: m["type"] == "error")["code"] == "bad_request"

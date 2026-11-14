@@ -69,10 +69,27 @@ within the spike's time box.
 ## Costs accepted
 
 - **TCP head-of-line blocking.** On a lossy link a lost packet delays the
-  frames behind it; the jitter buffer then trims to keep latency bounded
-  (gaps are audible). Not measured: simulating loss needs root (`tc netem`,
-  `dnctl`), unavailable on the maintainer's machine. TODO(verify) on a real
-  lossy VPN or Wi-Fi link during the iPhone pass.
+  frames behind it, then they arrive in a burst. Simulating loss needs root
+  (`tc netem`, `dnctl`), unavailable on the maintainer's machine, so a real
+  link was measured instead. During the iPad pass the operator heard "a bit
+  of audio skipping". Pings from the server to the iPad over Wi-Fi had a
+  median of 6 ms but a p90 of 197 ms and a maximum of 418 ms (400 pings,
+  0.1 s apart, while streaming). Replaying that trace through the browser
+  player in virtual time, 5 minutes per run:
+
+  | Player | Gaps | Skips | Silent |
+  |--------|------|-------|--------|
+  | Fixed 80 ms start, trim above 400 ms | 85 | 44 | 4.3 % |
+  | Adaptive (below) | 12 | 0 | 0.4 % |
+
+  The adaptive buffer starts at 80 ms, adds 40 ms after each gap (up to
+  400 ms), and drops 20 ms after each 30 s without one. It works off a
+  backlog by playing 3 % faster instead of skipping. On a clean link it
+  stays at 80 ms, so wired and good Wi-Fi clients keep the low delay.
+  On the iPad the remaining gaps came in clusters, and the operator traced
+  them to one spot in the room (Wi-Fi interference); elsewhere audio was
+  clean. The server logs late, lost and dropped audio per client
+  (`audio receive at`, `audio send to`) so such links can be spotted.
 - **Bandwidth.** 256 kbit/s each way per listener, versus roughly 32 to
   64 kbit/s for Opus. Fine on LAN and typical VPNs; a phone on a weak
   cellular link may struggle. A compressed codec over the same socket

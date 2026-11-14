@@ -21,6 +21,7 @@ export class BrowserAudio {
     this.mic = null;
     this.capture = null;
     this.txSeq = 0;
+    this.diag = null;
   }
 
   get running() { return !!this.ctx; }
@@ -65,6 +66,7 @@ export class BrowserAudio {
       this.player.port.onmessage = (ev) => this.onStats?.(ev.data);
       this.gain = new GainNode(ctx, { gain: volume });
       this.player.connect(this.gain).connect(ctx.destination);
+      this.startDiag();
     }
     // tools/bench_audio.py measures round-trip latency at this point.
     if (new URLSearchParams(location.search).has("bench")) window.rwrBench = { ctx, out: this.gain };
@@ -80,6 +82,9 @@ export class BrowserAudio {
   }
 
   async stop() {
+    if (this.lagTimer) clearInterval(this.lagTimer);
+    this.lagTimer = null;
+    this.diag = null;
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
     if (this.ctx) await this.ctx.close().catch(() => {});
@@ -94,8 +99,48 @@ export class BrowserAudio {
     const v = new DataView(buf);
     const count = v.getUint16(10, true);
     if (v.getUint16(8, true) !== NET_RATE || buf.byteLength !== HEADER + 2 * count) return;
+    this.noteArrival(v.getUint32(4, true));
     const samples = new Int16Array(buf.slice(HEADER));
     this.player.port.postMessage(samples, [samples.buffer]);
+  }
+
+  // Receive diagnostics: frame arrival gaps (network), sequence gaps (frames
+  // the server dropped), and main-thread stalls (page too busy to hand frames
+  // to the player). takeDiag() returns and resets one window.
+  noteArrival(seq) {
+    const d = this.diag, now = performance.now();
+    if (!d) return;
+    d.frames++;
+    if (d.lastSeq != null) {
+      const missed = (seq - d.lastSeq - 1) >>> 0;
+      if (missed > 0 && missed < 1000) d.lost += missed;
+    }
+    if (d.lastArr != null) {
+      const gap = now - d.lastArr;
+      if (gap > 100) d.late++;
+      if (gap > d.maxGap) d.maxGap = gap;
+    }
+    d.lastSeq = seq;
+    d.lastArr = now;
+  }
+
+  startDiag() {
+    this.diag = { frames: 0, lost: 0, late: 0, maxGap: 0, maxLag: 0, lastSeq: null, lastArr: null };
+    let expect = performance.now() + 20;
+    this.lagTimer = setInterval(() => {
+      const now = performance.now();
+      if (this.diag) this.diag.maxLag = Math.max(this.diag.maxLag, now - expect);
+      expect = now + 20;
+    }, 20);
+  }
+
+  takeDiag() {
+    const d = this.diag;
+    if (!d) return null;
+    const out = { frames: d.frames, lost: d.lost, late: d.late,
+      max_gap_ms: Math.round(d.maxGap), max_lag_ms: Math.max(0, Math.round(d.maxLag)) };
+    Object.assign(d, { frames: 0, lost: 0, late: 0, maxGap: 0, maxLag: 0 });
+    return out;
   }
 
   // Wrap mic samples as a transmit frame (type 0x03).

@@ -442,7 +442,10 @@ function audioStatus() {
   if (app.audioMode === "host") return "Using the radio computer's microphone and speaker.";
   const st = app.rxStats;
   const lvl = st && st.peakDb != null ? (st.peakDb <= -100 ? ", silent" : `, level ${st.peakDb} dB`) : "";
-  const rx = st ? `buffer ${st.bufferedMs} ms, ${st.underruns} gaps${lvl}` : "waiting for audio";
+  const tgt = st && st.targetMs != null ? ` (target ${st.targetMs})` : "";
+  const rx = st
+    ? `buffer ${st.bufferedMs} ms${tgt}, ${st.underruns} gaps, ${st.trims} skips${lvl}`
+    : "waiting for audio";
   return app.audioMode === "monitor" ? `Listening: ${rx}.` : `Mic and speaker on: ${rx}.`;
 }
 
@@ -482,6 +485,7 @@ async function startAudio() {
     }
     app.audioMode = mode;
     send({ type: "audio", mode });
+    startDiag();
     btn.textContent = "Stop audio";
     btn.classList.remove("primary");
     $("au-mode").disabled = true;
@@ -498,7 +502,27 @@ async function startAudio() {
   $("au-status").textContent = audioStatus();
 }
 
+// Every 5 s, report receive-audio health; the server logs it only when unhealthy.
+function startDiag() {
+  stopDiag();
+  app.diagPrev = { underruns: 0, trims: 0 };
+  app.diagTimer = setInterval(() => {
+    const d = app.audio?.takeDiag();
+    const st = app.rxStats;
+    if (!d || !st) return;
+    send({
+      type: "audio_diag", ...d,
+      gaps: Math.max(0, st.underruns - app.diagPrev.underruns),
+      skips: Math.max(0, st.trims - app.diagPrev.trims),
+      target_ms: st.targetMs ?? 0,
+    });
+    app.diagPrev = { underruns: st.underruns, trims: st.trims };
+  }, 5000);
+}
+function stopDiag() { if (app.diagTimer) clearInterval(app.diagTimer); app.diagTimer = null; }
+
 async function stopAudio() {
+  stopDiag();
   setPtt(false);
   send({ type: "audio", mode: null });
   app.audioMode = null;

@@ -34,6 +34,7 @@ import contextlib
 import itertools
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -51,6 +52,10 @@ from radio_web_remote.web.scope_wire import encode_scope_line
 log = logging.getLogger(__name__)
 
 MAX_MESSAGE = 4096
+DIAG_S = 5.0  # audio diagnostics window
+_now = time.monotonic  # diagnostics clock (patched in tests)
+# Browser receive-audio diagnostics, per DIAG_S window (see static/js/audio.js).
+DIAG_FIELDS = ("frames", "lost", "late", "max_gap_ms", "max_lag_ms", "gaps", "skips", "target_ms")
 IDLE_CLOSE_S = 10.0  # no message at all for this long: the client is gone
 REVALIDATE_S = 30.0
 MAX_HZ = 10_000_000_000
@@ -72,6 +77,10 @@ class _Conn:
         self.audio_mode: AudioMode | None = None
         # About 0.5 s of receive audio; beyond that a slow link drops audio, not control.
         self.audio_frames: collections.deque[bytes] = collections.deque(maxlen=25)
+        self.audio_dropped = 0  # frames dropped since the last diagnostics line
+        self.audio_max_send_s = 0.0
+        self.audio_diag_t = 0.0
+        self.client_diag_t = 0.0
         self.wake = asyncio.Event()
 
     def push_state(self, state: dict[str, Any]) -> None:
@@ -79,6 +88,8 @@ class _Conn:
         self.wake.set()
 
     def push_audio(self, frame: bytes) -> None:
+        if len(self.audio_frames) == self.audio_frames.maxlen:
+            self.audio_dropped += 1
         self.audio_frames.append(frame)
         self.wake.set()
 
@@ -224,13 +235,55 @@ class Hub:
             audio = list(conn.audio_frames)
             conn.audio_frames.clear()
             for af in audio:
+                t0 = time.monotonic()
                 await conn.ws.send_bytes(af)
+                conn.audio_max_send_s = max(conn.audio_max_send_s, time.monotonic() - t0)
+            if audio:
+                self._audio_diag(conn)
             for m in msgs:
                 await conn.ws.send_text(json.dumps(m))
             if state is not None:
                 await conn.ws.send_text(json.dumps({"type": "state", "state": state}))
             for frame in lines:
                 await conn.ws.send_bytes(frame)
+
+    def _audio_diag(self, conn: _Conn) -> None:
+        """Every DIAG_S, log a line if this client's link held audio up (quiet when healthy)."""
+        now = _now()
+        if now - conn.audio_diag_t < DIAG_S:
+            return
+        if conn.audio_dropped or conn.audio_max_send_s > 0.1:
+            log.info(
+                "audio send to %s: dropped %d frames, longest send %.0f ms, scope %s",
+                conn.op.username,
+                conn.audio_dropped,
+                conn.audio_max_send_s * 1000,
+                "on" if conn.scope_on else "off",
+            )
+        conn.audio_diag_t = now
+        conn.audio_dropped = 0
+        conn.audio_max_send_s = 0.0
+
+    def _client_diag(self, conn: _Conn, msg: dict[str, Any]) -> None:
+        """Browser receive-audio diagnostics: numbers only, rate limited, logged if unhealthy."""
+        now = _now()
+        if now - conn.client_diag_t < DIAG_S / 2:
+            return
+        conn.client_diag_t = now
+        vals = {}
+        for key in DIAG_FIELDS:
+            v = msg.get(key)
+            if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 10**7:
+                raise ValueError(f"bad {key}")
+            vals[key] = v
+        trouble = any(vals[k] for k in ("lost", "late", "gaps", "skips"))
+        if trouble or vals["max_lag_ms"] > 100:
+            log.info(
+                "audio receive at %s: %s, scope %s",
+                conn.op.username,
+                ", ".join(f"{k} {v}" for k, v in vals.items()),
+                "on" if conn.scope_on else "off",
+            )
 
     async def _update_scope_demand(self, radio_id: str) -> None:
         wanted = any(c.scope_on for c in self._conns.values() if c.radio_id == radio_id)
@@ -288,6 +341,8 @@ class Hub:
         try:
             if kind == "heartbeat":
                 tx.heartbeat(op)
+            elif kind == "audio_diag":
+                self._client_diag(conn, msg)
             elif kind == "ptt":
                 if msg.get("down") is True:
                     await tx.ptt_down(op)
