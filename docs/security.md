@@ -48,5 +48,5 @@ Not recommended in v1. If a member does it anyway, at minimum:
 
 ## Reporting a vulnerability
 
-See SECURITY.md (P5). Until then, contact the maintainer privately rather
-than opening a public issue.
+See [SECURITY.md](../SECURITY.md): report privately through GitHub's
+private vulnerability reporting, not in a public issue.

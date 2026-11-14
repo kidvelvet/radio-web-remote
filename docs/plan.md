@@ -25,7 +25,7 @@ Rule: a fact is used in code or docs only after it is checked against the source
 
 | # | Fact | Primary source | Needed by |
 |---|------|----------------|-----------|
-| F1 | 47 CFR 97.213 current wording and heading | eCFR (ecfr.gov), Title 47 Part 97 | P1 (TX timeout design), P5 docs |
+| F1 | 47 CFR 97.213 current wording and heading | eCFR (ecfr.gov), Title 47 Part 97 | Done 2026-11-13: heading "Telecommand of an amateur station"; text in docs/regulatory.md |
 | F2 | IC-7300 CI-V commands for every P1/P2 control: frequency, mode/filter, DATA mode, AF/RF/squelch, RF power, preamp, ATT, AGC, NB, NR, notch, RIT/XIT, split, meters (S, Po, SWR, ALC), PTT, scope `27 xx` | Icom IC-7300 Full Manual, CI-V section (icomjapan.com / icomamerica.com downloads) | P1, P2 |
 | F3 | IC-7300 scope data cadence and whether Transceive affects scope output | IC-7300 Full Manual | P2 |
 | F4 | IC-705 scope over USB: division count, waveform length, value range | IC-705 CI-V Reference Guide, `27 00` section. Other models list 689 points (IC-7610, IC-7760); not assumed for IC-705 | P4 |
@@ -36,13 +36,13 @@ Rule: a fact is used in code or docs only after it is checked against the source
 | F9 | Which items each model broadcasts with CI-V Transceive ON | CI-V Reference Guides; confirm on hardware | P1, P4 |
 | F10 | USB codec sample rates accepted per radio | Icom manuals; confirm with `doctor` on hardware | P3 |
 | F11 | USB VID/PID and serial-number behavior per radio (to match ports and audio by topology) | Observed on hardware via `doctor`; Icom driver docs | P1, P3 |
-| F12 | Icom Windows USB driver download page and install steps | Icom support site | P5 |
+| F12 | Icom Windows USB driver download page and install steps | Icom support site | Done 2026-11-13 (icomjapan.com driver pages, docs/install-windows.md); Device Manager port names TODO(verify) |
 | F13 | iOS/iPadOS steps to install a profile and enable full trust for a root certificate; Apple's TLS cert requirements for user-installed roots | Apple Support / Apple Platform Deployment docs | P1 |
 | F14 | DTR/RTS state on port close and on process death, per OS | pyserial docs, OS docs; confirm on hardware | P1 |
 | F15 | aiortc/aioice: fixed UDP port or range support; mDNS candidate handling | aiortc docs and source | P3 spike |
 | F16 | Safari (iOS) AudioWorklet, getUserMedia in home-screen mode, Wake Lock support | WebKit release notes, MDN compat data; confirm on device | P3 |
 | F17 | Current stable versions and licenses of every dependency | PyPI pages, project LICENSE files | P0 |
-| F18 | Regulatory note links: FCC Part 97, and a pointer that operation follows the rules of the country where the radio is | eCFR; national regulator sites as linked, no claims beyond the source | P5 |
+| F18 | Regulatory note links: FCC Part 97, and a pointer that operation follows the rules of the country where the radio is | eCFR; national regulator sites as linked, no claims beyond the source | Done for the US (97.5, 97.107); the general rule has only a secondary source (ARRL), TODO(verify) in docs/regulatory.md |
 
 ## 2. Repo layout
 
