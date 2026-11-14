@@ -41,6 +41,9 @@ def server(tmp_path_factory):
     cfg.write_text(
         f"server:\n  bind_address: 127.0.0.1\n  https_port: {port}\n"
         "ptt:\n  heartbeat_interval_s: 0.25\n  heartbeat_timeout_s: 1.0\n"
+        "radios:\n"
+        "  - id: sim-ic7300\n    driver: icom.ic7300\n"
+        "  - id: sim-ic705\n    driver: icom.ic705\n"
     )
     pw = secrets.token_urlsafe(16)
     common = ["--config", str(cfg), "--data-dir", str(d)]

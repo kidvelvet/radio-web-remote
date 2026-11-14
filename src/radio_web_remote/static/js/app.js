@@ -162,7 +162,7 @@ function render(s) {
   if (s.audio && !s.audio.available && app.audioMode) {
     $("au-status").textContent = `Radio audio is not available: ${s.audio.error || "unknown"}`;
   }
-  renderScopeSettings(s.scope);
+  renderScopeSettings(s.scope, s);
   const listener = app.hello && !app.hello.may_transmit && app.hello.user.role === "listener";
   document.querySelectorAll("#scope-controls select, #sc-hold").forEach((el) => { el.disabled = !!listener; });
   renderTx(s, prev);
@@ -398,16 +398,37 @@ function setScope(on) {
   send({ type: "scope", on });
 }
 
-function renderScopeSettings(sc) {
+const SCOPE_MODE_LABELS = { center: "Center", fixed: "Fixed", "scroll-c": "Scroll-C", "scroll-f": "Scroll-F" };
+// Span applies to Center and Scroll-C; the fixed edge to Fixed and Scroll-F.
+const SPAN_MODES = new Set(["center", "scroll-c"]);
+
+function fillOptions(sel, items) {  // items: [value, label]; rebuilt only when they change
+  const key = items.map((i) => i[0]).join();
+  if (sel.dataset.items === key) return;
+  sel.dataset.items = key;
+  sel.replaceChildren(...items.map(([v, label]) => {
+    const o = document.createElement("option");
+    o.value = String(v);
+    o.textContent = label;
+    return o;
+  }));
+}
+
+function renderScopeSettings(sc, s) {
   if (!sc) return;
-  const known = sc.mode === "center" || sc.mode === "fixed";
+  const modes = s.scope_modes && s.scope_modes.length ? s.scope_modes : ["center", "fixed"];
+  fillOptions($("sc-mode"), modes.map((m) => [m, SCOPE_MODE_LABELS[m] || m]));
+  const edges = s.scope_edges || 3;
+  fillOptions($("sc-edge"), Array.from({ length: edges }, (_, i) => [i + 1, String(i + 1)]));
+  const known = modes.includes(sc.mode);
   $("sc-note").textContent = sc.mode && !known ? `Radio is in ${sc.mode}` : "";
   for (const sel of document.querySelectorAll("#scope-controls select[data-scope]")) {
     const v = sc[sel.dataset.scope];
     if (v != null && document.activeElement !== sel) sel.value = String(v);
   }
-  document.querySelectorAll(".sc-center").forEach((el) => el.classList.toggle("hidden", sc.mode !== "center"));
-  document.querySelectorAll(".sc-fixed").forEach((el) => el.classList.toggle("hidden", sc.mode === "center"));
+  const span = SPAN_MODES.has(sc.mode);
+  document.querySelectorAll(".sc-center").forEach((el) => el.classList.toggle("hidden", !span));
+  document.querySelectorAll(".sc-fixed").forEach((el) => el.classList.toggle("hidden", span));
   $("sc-hold").setAttribute("aria-pressed", String(!!sc.hold));
 }
 

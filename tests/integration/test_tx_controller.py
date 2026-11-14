@@ -295,3 +295,58 @@ async def test_quick_rekey_is_not_killed_by_previous_unkey(rig):
     assert rig.sim.state.transmitting, "the new transmission was unkeyed by the old unkey"
     await rig.tx.ptt_up(ALICE)
     assert not rig.sim.state.transmitting
+
+
+# -- transmit frequency read from the radio (IC-705 table has 1C 03) ----------
+
+
+@pytest.fixture
+async def rig705():
+    from radio_web_remote.radios.icom import IC705
+
+    r = Rig(PttConfig(heartbeat_interval_s=0.1, heartbeat_timeout_s=0.5, tx_timeout_s=180))
+    r.sim = IcomSimulator(IC705)
+    r.host, r.radio_end = loopback_pair()
+    attach_loopback(r.sim, r.radio_end)
+    r.driver = IcomCivDriver(IC705, r.host, response_timeout_s=0.2)
+    r.tx = TxController(
+        "ic705",
+        r.driver,
+        r.tx.ptt,
+        frequency=lambda: r.freq,  # displayed: 14.200 MHz, inside carol's band
+        tx_frequency=r.driver.get_tx_frequency,
+        audit=r.audit.append,
+        watchdog_interval_s=0.02,
+    )
+    await r.start()
+    yield r
+    await r.close()
+
+
+async def test_limits_use_the_radios_tx_frequency(rig705):
+    rig705.sim.state.frequency_hz = 14_200_000
+    rig705.sim.state.split_tx_hz = 7_150_000  # split: TX on 40 m
+    with pytest.raises(TxDenied) as e:
+        await rig705.tx.ptt_down(TWENTY_ONLY)
+    assert e.value.reason is DenyReason.OUT_OF_LIMITS
+    assert not rig705.on_air and True not in rig705.sim.tx_history
+
+
+async def test_tx_frequency_moving_out_while_keyed_unkeys(rig705):
+    rig705.sim.state.frequency_hz = 14_200_000
+    await rig705.tx.ptt_down(TWENTY_ONLY)
+    assert rig705.on_air
+    await rig705.tx.recheck_frequency()  # still inside: stays keyed
+    assert rig705.on_air
+    rig705.sim.state.split_tx_hz = 7_150_000  # e.g. split switched on at the radio
+    await rig705.tx.frequency_changed(14_200_000)  # displayed frequency did not move
+    assert not rig705.on_air
+    assert rig705.stops() == ["out_of_limits"]
+
+
+async def test_unreadable_tx_frequency_refuses_to_key(rig705):
+    rig705.sim.silent = True
+    with pytest.raises(TxDenied) as e:
+        await rig705.tx.ptt_down(ALICE)
+    assert e.value.reason is DenyReason.RADIO_ERROR
+    assert True not in rig705.sim.tx_history

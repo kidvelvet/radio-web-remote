@@ -13,6 +13,17 @@ third-party copy) or confirmed on hardware. Until then the row is a
 | Short name | Document | Copy read | Primary checked |
 |------------|----------|-----------|-----------------|
 | 7300-FM | Icom IC-7300 Full Manual, section 19 "Control Command" (pp. 19-1 to 19-13) and section 12 "Set mode" | manualslib.com manual 1106166 (pages 154-163); libble.eu manual 828087 (pp. 19-7, 19-8), read 2026-11-13 | No. TODO(verify) against the Icom PDF from icomjapan.com/support |
+| 705-CIV | Icom IC-705 CI-V Reference Guide, A7560-8EX-6, Jan. 2023 | Icom's PDF, icomjapan.com/support/manual/3064, read 2026-11-13 | Yes |
+| 705-BM | Icom IC-705 Basic Manual, A7560D-1EX-7, Sep. 2023 | Icom's PDF, icomeurope.com, read 2026-11-13 | Yes |
+| 705-AM | Icom IC-705 Advanced Manual, A7560-7EX-5, Apr. 2026 | Icom's PDF, icomjapan.com/support/manual/3063, read 2026-11-13 | Yes |
+| 9700-CIV | Icom IC-9700 CI-V Reference Guide, A7508-3EX-4, Mar. 2023 | Icom's PDF, icomjapan.com/support/manual/2161, read 2026-11-13 | Yes |
+| 9700-BM | Icom IC-9700 Basic Manual, A7508H-1EX-7, Jan. 2026 | Icom's PDF, icomjapan.com/support/manual/2156, read 2026-11-13 | Yes |
+| 9700-AM | Icom IC-9700 Advanced Manual, A7508-2EX-3, May 2026 | Icom's PDF, icomjapan.com/support/manual/2166, read 2026-11-13 | Yes |
+
+Icom's download terms allow individual use and forbid redistributing the
+manuals or their contents. This project never stores the PDFs; it cites
+page numbers and states individual facts (command bytes, value ranges) in
+its own words. Get the PDFs from Icom to check an entry.
 
 ## Framing (all Icom CI-V models so far)
 
@@ -60,9 +71,39 @@ third-party copy) or confirmed on hardware. Until then the row is a
 | CI-V USB port (link/unlink REMOTE) | `1A 05 0074`, read only | 7300-FM p. 19-5 | not used yet |
 | USB Echo Back | `1A 05 0075`, 00 ON / 01 OFF | 7300-FM p. 19-5 | **Does not match hardware.** On the maintainer's IC-7300 (firmware not recorded) it read `00` with the menu both ON and OFF (H7300-5). Menu item numbers may shift between firmware versions. Do not use any `1A 05` item until checked on the firmware in use. |
 
-## IC-705, IC-9700
+## IC-705
 
-Not yet read. Scheduled for P4. No entries are copied from the IC-7300.
+Read in Icom's own PDFs. Code: `src/radio_web_remote/radios/icom/ic705.py`.
+Not yet checked on hardware (docs/hardware-test.md, IC-705 rows).
+
+| Function | Bytes | Source | Notes |
+|----------|-------|--------|-------|
+| Default CI-V address | `A4` | 705-CIV p. 2; 705-BM 8-16 | |
+| Frequency, mode (transceive, read, set) | `00`, `01`, `03`, `04`, `05`, `06` | 705-CIV pp. 3, 17 | Same command numbers as the IC-7300, read separately here |
+| Frequency format | 5 bytes BCD; 1 GHz digit fixed 0, 100 MHz digit 0 to 4 | 705-CIV p. 17 | So the driver refuses 500 MHz and above |
+| Mode codes | LSB 00, USB 01, AM 02, CW 03, RTTY 04, FM 05, WFM 06, CW-R 07, RTTY-R 08, DV 17 | 705-CIV pp. 17, 27 | |
+| Filters | FIL1 to FIL3, `01` to `03` | 705-CIV pp. 17, 27 | |
+| TX state / PTT | `1C 00` + 00 RX / 01 TX | 705-CIV p. 14 | |
+| Read TX frequency | `1C 03` | 705-CIV pp. 14, 17 | Used by the TX limit check (split) |
+| AF, RF gain, squelch, RF power | `14 01`, `14 02`, `14 03`, `14 0A`, 0000 to 0255 | 705-CIV pp. 3, 4 | Byte order TODO(verify) on hardware |
+| S, Po, SWR, ALC meters | `15 02`, `15 11`, `15 12`, `15 13` | 705-CIV p. 4 | Calibration points as printed there |
+| DATA mode | `1A 06` + 00/01 + filter | 705-CIV pp. 14, 22 | |
+| Scope data | `27 00`; 475 points, 0 to 160; 11 divisions over USB, 1 over WLAN | 705-CIV pp. 15, 28 | Points per division and BCD vs binary not stated: the parser accepts both division encodings; TODO(verify) on hardware |
+| Scope on, data output | `27 10`, `27 11`, no selector byte | 705-CIV p. 15 | |
+| Scope mode | `27 14 00` + Center 00 / Fixed 01 / Scroll-C 02 / Scroll-F 03 | 705-CIV p. 15 | |
+| Span, edge, hold | `27 15 00`, `27 16 00` + edge 01 to 04, `27 17 00` | 705-CIV pp. 15, 16, 29 | Four fixed edges |
+| Reference level, speed | `27 19 00`, `27 1A 00` | 705-CIV pp. 16, 29 | Same ranges as listed for the IC-7300 |
+| CI-V menu | Address, Transceive, USB Echo Back only | 705-BM 8-16 | No CI-V baud rate and no USB port link/unlink item |
+| Time-Out Timer | `1A 05 0043`: OFF, 3, 5, 10, 20, 30 min; default 5 min | 705-CIV p. 6; 705-BM 8-4 | `1A 05` numbers not used until read on hardware |
+| USB serial ports | "IC-705 Serial Port A (CI-V)" and "Serial Port B" | 705-CIV p. 2; 705-BM 8-16 | Port A carries CI-V |
+
+Open: FC collision code; transceive destination address; whether `1C 00`
+is broadcast; USB VID/PID and audio sample rate. A PRESET memory can change
+the CI-V address and Echo Back (705-AM 9-9).
+
+## IC-9700
+
+Facts read in Icom's own PDFs (documents above); table added in P4.
 
 ### Inconsistencies inside the IC-7300 manual (as printed)
 

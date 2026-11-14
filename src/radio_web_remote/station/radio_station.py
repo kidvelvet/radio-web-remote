@@ -72,6 +72,8 @@ class RadioState:
     filter: int | None = None
     features: tuple[str, ...] = ()
     modes: tuple[str, ...] = ()
+    scope_modes: tuple[str, ...] = ()
+    scope_edges: int = 0
     data_mode: bool | None = None
     levels: dict[str, int] = field(default_factory=dict)  # "af" -> 0..255
     meters: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -91,6 +93,7 @@ class RadioState:
         }
         d["features"] = list(self.features)
         d["modes"] = list(self.modes)
+        d["scope_modes"] = list(self.scope_modes)
         return d
 
 
@@ -150,6 +153,7 @@ class RadioStation:
             _PttProxy(self),
             ptt,
             frequency=lambda: self.state.frequency_hz,
+            tx_frequency=self._tx_frequency,
             power=lambda: self.state.levels.get(Level.RF_POWER.value),
             audit=audit,
             watchdog_interval_s=tx_watchdog_s,
@@ -262,6 +266,8 @@ class RadioStation:
             filter=mode.filter,
             features=tuple(sorted(f.value for f in driver.features)),
             modes=tuple(m.value for m in driver.modes),
+            scope_modes=driver.scope_modes(),
+            scope_edges=driver.scope_edges(),
         )
         if self._scope_wanted and Feature.SCOPE in driver.features:
             await driver.set_scope_output(True)  # re-apply after a reconnect
@@ -359,11 +365,21 @@ class RadioStation:
         if self._unchanged_since("frequency", f_mark) and hz != self.state.frequency_hz:
             self._update(frequency_hz=hz)
             await self.tx.frequency_changed(hz)
+        elif self.tx.status.transmitting and Feature.TX_FREQUENCY in driver.features:
+            # Split or the transmit band can change without the displayed frequency moving.
+            await self.tx.recheck_frequency()
         if self._unchanged_since("mode", m_mark) and (mode.mode.value, mode.filter) != (
             self.state.mode,
             self.state.filter,
         ):
             self._update(mode=mode.mode.value, filter=mode.filter)
+
+    async def _tx_frequency(self) -> int | None:
+        """For the TX limit check: the radio's transmit frequency where it can report it."""
+        driver = self._driver
+        if driver is not None and self._connected and Feature.TX_FREQUENCY in driver.features:
+            return await driver.get_tx_frequency()
+        return self.state.frequency_hz
 
     async def _drop_driver(self) -> None:
         driver, self._driver = self._driver, None

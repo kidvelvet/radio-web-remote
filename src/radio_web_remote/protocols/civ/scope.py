@@ -43,8 +43,21 @@ MODE_FIXED = 0x01
 def _bcd_byte(b: int) -> int:
     hi, lo = b >> 4, b & 0x0F
     if hi > 9 or lo > 9:
-        raise ReplyError(f"division byte {b:02X} is not BCD")
+        raise ReplyError(f"byte {b:02X} is not BCD")
     return hi * 10 + lo
+
+
+def _division_byte(b: int) -> int:
+    """Division number 1..11. The IC-7300 sends BCD (11 as 0x11, H7300-14); the
+    IC-705 and IC-9700 guides do not say. Both readings are accepted: they only
+    differ for 10 and 11 (BCD 0x10, 0x11; binary 0x0A, 0x0B), and binary 0x10
+    and 0x11 (16, 17) are out of range, so a byte can't mean both."""
+    if b in (0x0A, 0x0B):
+        return b
+    value = _bcd_byte(b)
+    if not 1 <= value <= 11:
+        raise ReplyError(f"division number {b:02X} out of range")
+    return value
 
 
 @dataclass
@@ -76,7 +89,7 @@ class ScopeAssembler:
         """Feed one frame payload starting with 27 00. Returns a line when a sweep completes."""
         if not payload.startswith(SCOPE_DATA) or len(payload) < 5:
             raise ReplyError(f"not a scope data frame: {payload[:8].hex(' ')}")
-        div, max_div = _bcd_byte(payload[3]), _bcd_byte(payload[4])
+        div, max_div = _division_byte(payload[3]), _division_byte(payload[4])
         body = payload[5:]
         if div == 1:
             self._drop()

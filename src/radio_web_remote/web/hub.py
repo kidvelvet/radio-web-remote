@@ -370,9 +370,10 @@ class Hub:
                 name = msg.get("setting")
                 value = msg.get("value")
                 checks = {
-                    "mode": lambda v: v in ("center", "fixed"),
+                    # The driver checks these against the model's own table.
+                    "mode": lambda v: v in ("center", "fixed", "scroll-c", "scroll-f"),
                     "span": lambda v: isinstance(v, int) and not isinstance(v, bool),
-                    "edge": lambda v: v in (1, 2, 3) and not isinstance(v, bool),
+                    "edge": lambda v: v in (1, 2, 3, 4) and not isinstance(v, bool),
                     "hold": lambda v: isinstance(v, bool),
                     "ref": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
                     "speed": lambda v: v in ("fast", "mid", "slow"),

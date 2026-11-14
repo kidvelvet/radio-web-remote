@@ -55,6 +55,11 @@ class ScopeSpec:
     points: int  # waveform length
     max_value: int  # top of the data range
     source: Source
+    # Scope modes the document lists for 27 14, in code order (00, 01, ...).
+    modes: tuple[str, ...] = ("center", "fixed")
+    modes_source: Source | None = None
+    edges: int = 3  # fixed-edge numbers 1..edges for 27 16
+    edges_source: Source | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,8 @@ class IcomModel:
                 f.add(Feature.FILTER)
         if CivCommand.TX_STATE in self.commands:
             f.add(Feature.PTT)
+        if CivCommand.READ_TX_FREQUENCY in self.commands:
+            f.add(Feature.TX_FREQUENCY)
         if CivCommand.TRANSCEIVE_FREQUENCY in self.commands:
             f.add(Feature.TRANSCEIVE)
         if CivCommand.DATA_MODE in self.commands:

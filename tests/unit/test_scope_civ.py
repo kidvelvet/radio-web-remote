@@ -86,8 +86,24 @@ def test_points_clipped_to_documented_range():
 def test_bad_frames():
     with pytest.raises(ReplyError):
         sc.ScopeAssembler().feed(b"\x27\x14\x00\x02")
-    with pytest.raises(ReplyError):
-        sc.ScopeAssembler().feed(bytes.fromhex("2700000A11"))  # 0A is not BCD
+    for div in ("1F", "12", "00", "0C"):  # not 1..11 as BCD or as binary
+        with pytest.raises(ReplyError):
+            sc.ScopeAssembler().feed(bytes.fromhex(f"270000{div}11"))
+
+
+def test_binary_division_numbers_also_accepted():
+    """The IC-705 and IC-9700 guides don't say BCD or binary; both must work."""
+    line = ScopeLine(14_000_000, 14_350_000, bytes(range(160)) + bytes(315), 160, True)
+    bcd = sc.sweep_frames(line, sc.MODE_FIXED, 0, 0)
+    binary = []
+    for f in bcd:
+        div = int(f"{f[3]:02X}")  # BCD byte -> number
+        binary.append(f[:3] + bytes([div, 11]) + f[5:])
+    for frames_ in (bcd, binary):
+        asm = sc.ScopeAssembler()
+        out = [asm.feed(f) for f in frames_]
+        assert out[-1] is not None and out[-1].points == line.points
+        assert asm.stats.dropped == 0
 
 
 @pytest.mark.parametrize(

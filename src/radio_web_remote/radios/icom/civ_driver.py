@@ -232,6 +232,12 @@ class IcomCivDriver(RadioDriver):
         reply = await self._transact(CivCommand.READ_FREQUENCY, cmd.read_frequency(), True)
         return cmd.parse_frequency(reply.payload)
 
+    async def get_tx_frequency(self) -> int:
+        self._require(CivCommand.READ_TX_FREQUENCY)
+        command = CivCommand.READ_TX_FREQUENCY
+        reply = await self._transact(command, command.prefix, True, Priority.URGENT)
+        return cmd.decode_frequency_reply(command, reply.payload)
+
     async def set_frequency(self, hz: int) -> None:
         if not 0 < hz <= self.model.max_encodable_hz:
             raise ValueError(f"{hz} Hz is outside what {self.model.name} can encode")
@@ -307,6 +313,12 @@ class IcomCivDriver(RadioDriver):
         flag = b"\x01" if on else b"\x00"
         await self._transact(CivCommand.SCOPE_OUTPUT, CivCommand.SCOPE_OUTPUT.prefix + flag, False)
 
+    def scope_modes(self) -> tuple[str, ...]:
+        return self.model.scope.modes if self.model.scope else ()
+
+    def scope_edges(self) -> int:
+        return self.model.scope.edges if self.model.scope else 0
+
     def scope_settings_supported(self) -> list[str]:
         return [k for k, c in self._SCOPE_SETTINGS.items() if self.model.supports(c)]
 
@@ -322,7 +334,8 @@ class IcomCivDriver(RadioDriver):
             raise ReplyError(f"empty {name} reply")
         value = data[0]
         if name == "mode":
-            return {0: "center", 1: "fixed"}.get(value, f"mode {value:02X} (not in manual)")
+            modes = self.scope_modes()
+            return modes[value] if value < len(modes) else f"mode {value:02X} (not in manual)"
         if name == "speed":
             return sc.SPEEDS[value] if value < len(sc.SPEEDS) else f"speed {value:02X}"
         if name == "hold":
@@ -333,12 +346,16 @@ class IcomCivDriver(RadioDriver):
         command = self._SCOPE_SETTINGS[name]
         self._require(command)
         if name == "mode":
-            data = bytes([{"center": 0, "fixed": 1}[value]])
+            modes = self.scope_modes()
+            if value not in modes:
+                raise ValueError(f"scope mode must be one of {', '.join(modes)}")
+            data = bytes([modes.index(value)])
         elif name == "span":
             data = sc.encode_span(int(value))
         elif name == "edge":
-            if value not in (1, 2, 3):
-                raise ValueError("edge must be 1, 2 or 3")
+            edges = self.scope_edges()
+            if isinstance(value, bool) or value not in range(1, edges + 1):
+                raise ValueError(f"edge must be 1 to {edges}")
             data = bytes([value])
         elif name == "hold":
             data = b"\x01" if value else b"\x00"

@@ -21,6 +21,9 @@ class Mode(Enum):
     RTTY = "RTTY"
     RTTY_R = "RTTY-R"
     FM = "FM"
+    WFM = "WFM"
+    DV = "DV"  # D-STAR digital voice
+    DD = "DD"  # D-STAR digital data
 
 
 class Feature(Enum):
@@ -41,6 +44,7 @@ class Feature(Enum):
     METER_SWR = "meter_swr"
     METER_ALC = "meter_alc"
     SCOPE = "scope"
+    TX_FREQUENCY = "tx_frequency"  # can read the frequency it will transmit on
 
 
 class Level(Enum):
@@ -175,6 +179,16 @@ class RadioDriver(ABC):
 
     async def get_data_mode(self) -> bool:
         raise Unsupported(f"{self.model_name} has no documented DATA mode")
+
+    async def get_tx_frequency(self) -> int:
+        """The frequency the radio would transmit on (split, sub band, satellite uplink)."""
+        raise Unsupported(f"{self.model_name} has no documented TX frequency read")
+
+    def scope_modes(self) -> tuple[str, ...]:
+        return ()
+
+    def scope_edges(self) -> int:
+        return 0
 
     async def set_scope_output(self, on: bool) -> None:
         """Turn the scope and its data output on or off; lines arrive as StateEvent("scope")."""

@@ -213,6 +213,33 @@ def test_scope_settings(page: Page, server):
     page.select_option("#sc-span", "50000")
 
 
+def _options(page: Page, sel: str) -> list[str]:
+    return page.eval_on_selector_all(f"{sel} option", "els => els.map(e => e.value)")
+
+
+def test_ic705_page_shows_its_own_modes_and_scope_options(page: Page, server):
+    login(page, server)
+    assert _options(page, "#sc-mode") == ["center", "fixed"]  # first radio: IC-7300
+    assert _options(page, "#sc-edge") == ["1", "2", "3"]
+    expect(page.locator("#modes button:has-text('DV')")).to_have_count(0)
+    page.goto("/?radio=sim-ic705")
+    expect(page.locator("#link")).to_have_text("Connected", timeout=10_000)
+    expect(page.locator("#modes button:has-text('WFM')")).to_be_visible(timeout=10_000)
+    expect(page.locator("#modes button:has-text('DV')")).to_be_visible()
+    _scope_on(page)
+    assert _options(page, "#sc-mode") == ["center", "fixed", "scroll-c", "scroll-f"]
+    assert _options(page, "#sc-edge") == ["1", "2", "3", "4"]
+    page.select_option("#sc-mode", "scroll-f")
+    expect(page.locator(".sc-fixed")).to_be_visible()
+    expect(page.locator(".sc-center")).to_be_hidden()
+    page.select_option("#sc-edge", "4")
+    page.select_option("#sc-mode", "scroll-c")
+    expect(page.locator(".sc-center")).to_be_visible(timeout=5_000)
+    expect(page.locator(".sc-fixed")).to_be_hidden()
+    expect(page.locator("#sc-note")).to_have_text("")
+    page.select_option("#sc-mode", "center")
+
+
 def _audio_started(page: Page):
     try:
         expect(page.locator("#au-start")).to_have_text("Stop audio", timeout=10_000)

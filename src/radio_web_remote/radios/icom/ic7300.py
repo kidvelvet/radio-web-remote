@@ -86,7 +86,13 @@ IC7300 = IcomModel(
         Meter.ALC: MeterCal(((0, 0.0), (120, 100.0)), "%", _src("19-3", "0000=Min. to 0120=Max.")),
     },
     scope=ScopeSpec(
-        points=475, max_value=160, source=_src("19-12", "data range 0~160, length 475")
+        points=475,
+        max_value=160,
+        source=_src("19-12", "data range 0~160, length 475"),
+        modes=("center", "fixed"),
+        modes_source=_src("19-7, 19-12", "27 14 00 + 00 Center / 01 Fixed"),
+        edges=3,
+        edges_source=_src("19-7, 19-12", "27 16 00 + edge 01-03"),
     ),
     # p. 19-8: the 100 MHz and 1000 MHz digits are fixed at 0 on the IC-7300.
     max_encodable_hz=99_999_999,

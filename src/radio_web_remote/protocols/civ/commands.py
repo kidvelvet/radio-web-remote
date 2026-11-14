@@ -27,6 +27,7 @@ class CivCommand(Enum):
     SET_FREQUENCY = (0x05, b"")
     SET_MODE = (0x06, b"")
     TX_STATE = (0x1C, b"\x00")  # read with no data, set with 00 (RX) / 01 (TX)
+    READ_TX_FREQUENCY = (0x1C, b"\x03")  # read only; same 5-byte format as 03
     AF_LEVEL = (0x14, b"\x01")
     RF_GAIN = (0x14, b"\x02")
     SQUELCH = (0x14, b"\x03")
@@ -84,6 +85,14 @@ def decode_level(data: bytes) -> int:
     if value > LEVEL_MAX:
         raise ReplyError(f"level {value} above {LEVEL_MAX}: byte order assumption may be wrong")
     return value
+
+
+def decode_frequency_reply(command: CivCommand, payload: bytes) -> int:
+    """Frequency after a command prefix, e.g. 1C 03 + 5 bytes."""
+    prefix = command.prefix
+    if not payload.startswith(prefix) or len(payload) != len(prefix) + FREQ_BYTES:
+        raise ReplyError(f"bad {command.name} reply: {payload.hex(' ')}")
+    return decode_frequency(payload[len(prefix) :])
 
 
 def read_value(command: CivCommand) -> bytes:

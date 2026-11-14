@@ -26,7 +26,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
@@ -144,6 +144,10 @@ class TxController:
         frequency: Callable[[], int | None],
         audit: AuditSink | None = None,
         power: Callable[[], int | None] = lambda: None,
+        # Reads the frequency the radio will transmit on, where the radio can
+        # report it (split, IC-9700 sub band or satellite uplink differ from the
+        # displayed frequency). None: use `frequency`.
+        tx_frequency: Callable[[], Awaitable[int | None]] | None = None,
         watchdog_interval_s: float = WATCHDOG_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -151,6 +155,7 @@ class TxController:
         self.driver = driver
         self.ptt = ptt
         self._frequency = frequency
+        self._tx_frequency = tx_frequency
         self._power = power
         self._audit = audit
         self._interval = watchdog_interval_s
@@ -239,7 +244,12 @@ class TxController:
                     self._last_heartbeat = self._clock()
                     return  # already holding; a repeated press is a heartbeat
                 raise TxDenied(DenyReason.HELD_BY_OTHER, holder.callsign)
-            hz = self._frequency()
+            try:
+                hz = await self._read_tx_hz()
+            except RadioError as exc:
+                raise TxDenied(
+                    DenyReason.RADIO_ERROR, f"could not read the transmit frequency: {exc}"
+                ) from exc
             if not op.limits.allows_frequency(hz):
                 raise TxDenied(DenyReason.OUT_OF_LIMITS, f"{hz} Hz is outside this user's bands")
             if not op.limits.allows_power(self._power()):
@@ -300,9 +310,33 @@ class TxController:
             await self._stop(StopReason.OUT_OF_LIMITS)
 
     async def frequency_changed(self, hz: int) -> None:
+        """The displayed frequency changed. With a TX frequency reader, re-read that instead."""
+        if self._tx_frequency is not None:
+            await self.recheck_frequency()
+            return
         holder = self._holder
         if holder is not None and not holder.limits.allows_frequency(hz):
             await self._stop(StopReason.OUT_OF_LIMITS)
+
+    async def recheck_frequency(self) -> None:
+        """While keyed: read the transmit frequency again and stop if it left the limits."""
+        holder = self._holder
+        if holder is None:
+            return
+        try:
+            hz = await self._read_tx_hz()
+        except RadioError as exc:
+            log.error("TX frequency read failed on %s while keyed: %s", self.radio_id, exc)
+            if self._holder is holder:
+                await self._stop(StopReason.RADIO_ERROR)
+            return
+        if self._holder is holder and not holder.limits.allows_frequency(hz):
+            await self._stop(StopReason.OUT_OF_LIMITS)
+
+    async def _read_tx_hz(self) -> int | None:
+        if self._tx_frequency is not None:
+            return await self._tx_frequency()
+        return self._frequency()
 
     # -- internals ---------------------------------------------------------
     async def _stop(self, reason: StopReason, force: bool = False) -> None:

@@ -37,6 +37,7 @@ TRANSCEIVE_TO = 0x00  # observed on IC-7300 hardware; see civ_driver.BROADCAST
 @dataclass
 class SimState:
     frequency_hz: int = 14_074_000
+    split_tx_hz: int | None = None  # test hook: TX elsewhere, as with split
     mode_code: int = 0x01  # USB on the IC-7300 table
     filter_code: int = 0x01
     transmitting: bool = False
@@ -162,6 +163,11 @@ class IcomSimulator:
         if sub in simple:
             if not arg:
                 return p + bytes([getattr(st, simple[sub])])
+            spec = self.model.scope
+            assert spec is not None
+            limits = {b"\x14": range(len(spec.modes)), b"\x16": range(1, spec.edges + 1)}
+            if sub in limits and arg[0] not in limits[sub]:
+                return ng  # code the model's document doesn't list
             setattr(st, simple[sub], arg[0])
             return ok
         if sub == b"\x17":
@@ -183,6 +189,11 @@ class IcomSimulator:
             st.scope_ref = bytes(arg)
             return ok
         return ng
+
+    def tx_frequency_hz(self) -> int:
+        """1C 03: the frequency a key-up would use."""
+        st = self.state
+        return st.split_tx_hz if st.split_tx_hz is not None else st.frequency_hz
 
     def reported_tx(self, now: float | None = None) -> bool:
         """TX state as the radio would report it: still TX until the release delay passes."""
@@ -254,6 +265,8 @@ class IcomSimulator:
             if len(data) == 2:
                 self.state.filter_code = data[1]
             return ok
+        if p == CivCommand.READ_TX_FREQUENCY.prefix and m.supports(CivCommand.READ_TX_FREQUENCY):
+            return p + encode_frequency(self.tx_frequency_hz())
         if p.startswith(CivCommand.TX_STATE.prefix) and m.supports(CivCommand.TX_STATE):
             data = p[len(CivCommand.TX_STATE.prefix) :]
             if not data:
