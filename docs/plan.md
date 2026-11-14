@@ -1,6 +1,6 @@
 # radio-web-remote: v1 plan
 
-Status: proposed, awaiting approval. Architecture is in [adr/0001-architecture.md](adr/0001-architecture.md).
+Status: approved 2026-11-13; P0 to P5 done, v0.1.0 released 2026-11-14. Architecture is in [adr/0001-architecture.md](adr/0001-architecture.md).
 
 ## Status (2026-11-13)
 
@@ -9,7 +9,8 @@ Status: proposed, awaiting approval. Architecture is in [adr/0001-architecture.m
 - **P2: done.** IC-7300 scope and waterfall: parser built from the manual and settled against real frames (H7300-14), simulator, browser UI with tap-to-tune and scope settings; 216 unit and integration tests, 42 browser tests; on-radio check H7300-15 passed.
 - **P3a: done.** Audio over WSS (16 kHz PCM), remote/host/monitor routing, mic and speaker pickers, TX level; IC-7300 checks H7300-16, -17, -18 pass.
 - **P3b: done.** WebRTC compared and set aside for v1 (ADR 0002; spike on branch `spike/webrtc`). iPhone and iPad pass in a Safari tab and as a home-screen app, including H7300-13 (IOS-1 to -5). Adaptive receive buffer and per-client audio diagnostics added after iPad Wi-Fi testing. "Resume audio" after a relaunch: done in P5.
-- **P4: done.** IC-705 and IC-9700 tables from Icom's own current PDFs (download agreement accepted by the maintainer); simulator profiles; MAIN/SUB select and swap with the scope following the selected band; the TX limit check reads the radio's transmit frequency (1C 03), so split, the IC-9700 MAIN/SUB arrangement and satellite mode cannot transmit outside a user's bands. Band shortcuts follow each model's documented coverage. IC-705 rows H705-1 to -8 pass (firmware 1.32) and IC-9700 rows H9700-1 to -10 pass (firmware 1.50), 2026-11-13. **P4: done.** **P5 next:** packaging, doctor, docs, release.
+- **P4: done.** IC-705 and IC-9700 tables from Icom's own current PDFs (download agreement accepted by the maintainer); simulator profiles; MAIN/SUB select and swap with the scope following the selected band; the TX limit check reads the radio's transmit frequency (1C 03), so split, the IC-9700 MAIN/SUB arrangement and satellite mode cannot transmit outside a user's bands. Band shortcuts follow each model's documented coverage. IC-705 rows H705-1 to -8 pass (firmware 1.32) and IC-9700 rows H9700-1 to -10 pass (firmware 1.50), 2026-11-13. **P4: done.**
+- **P5: done (2026-11-14).** `doctor`; install scripts for Linux, macOS and Windows with a service option (systemd user unit, a Terminal login item on macOS because launchd gets no audio, Task Scheduler), tested in CI on all three; udev and Docker examples; Resume audio; auto_detect_address on by default; install, VPN, troubleshooting and regulatory docs, SECURITY, CONTRIBUTING, CHANGELOG; v0.1.0 tagged. Not done on hardware: a clean install on Raspberry Pi OS and on Windows 11 with a radio attached (CI covers the scripts without a radio).
 
 ## 0. Decisions recorded (2026-11-13)
 
