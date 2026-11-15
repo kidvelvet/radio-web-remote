@@ -1,6 +1,7 @@
 """Telling radios' codecs apart by USB hub (all are named "USB Audio CODEC")."""
 
 import os
+import sys
 
 import pytest
 
@@ -54,6 +55,9 @@ def test_align_survives_a_device_that_came_or_went():
     assert align(stale, fewer)[:4] == [None] * 4
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="sysfs names contain ':', not allowed on Windows"
+)
 def test_linux_path_from_sysfs(tmp_path):
     usb = tmp_path / "devices" / "pci0000:00" / "usb1" / "1-1" / "1-1.4" / "1-1.4:1.0"
     usb.mkdir(parents=True)
