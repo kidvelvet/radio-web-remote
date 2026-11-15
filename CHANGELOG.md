@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-11-14)
+
+Found while testing two radios (IC-7300 and IC-9700) on one Mac.
 
 - Several radios on one computer (macOS, Linux): `auto` audio picks the codec
   on the same USB hub as the radio's serial port. All Icom codecs have the

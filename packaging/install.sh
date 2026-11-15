@@ -18,7 +18,7 @@
 # Support/radio-web-remote) and are never touched by this script.
 set -eu
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 REPO="https://github.com/kidvelvet/radio-web-remote"
 SOURCE="${RWR_SOURCE:-$REPO/releases/download/v$VERSION/radio_web_remote-$VERSION-py3-none-any.whl}"
 PREFIX="${RWR_PREFIX:-$HOME/.local/opt/radio-web-remote}"

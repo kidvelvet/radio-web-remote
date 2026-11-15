@@ -10,7 +10,7 @@ No app to install on the phone, tablet or laptop.
   <img src="docs/screenshots/ic9700-phone.png" alt="IC-9700 on a phone with MAIN, SUB, Swap and Dualwatch" width="260">
 </p>
 
-Status: **0.1.1.** Built for a club's members, tested on real
+Status: **0.1.2.** Built for a club's members, tested on real
 radios ([docs/hardware-test.md](docs/hardware-test.md)).
 
 ## Supported radios
