@@ -12,13 +12,14 @@ matches are narrowed to the default host API before being called ambiguous.
 The IC-7300 codec appears under that name on macOS (observed 2026-11-13,
 manufacturer "Burr-Brown from TI"), and the brief notes Windows shows a
 generic "USB Audio CODEC" too, so names alone cannot tell two radios apart.
-With several radios on one host, set the device explicitly.
-TODO(verify): match codec to serial port by USB topology (planned for doctor, P5).
+With several radios on one host, "auto" picks the codec on the same USB hub
+as the radio's serial port, where the system says where devices sit (macOS,
+Linux; audio/usb_paths.py). On Windows, set each radio's devices explicitly.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 CODEC_NAME = "USB Audio CODEC"
@@ -36,6 +37,7 @@ class AudioDevice:
     inputs: int
     outputs: int
     host_api: str
+    usb_path: str | None = None  # "32-3.4": USB bus and ports, where the system tells
 
 
 def list_devices(backend: Any = None) -> list[AudioDevice]:
@@ -45,7 +47,7 @@ def list_devices(backend: Any = None) -> list[AudioDevice]:
         backend = sounddevice
     sd = backend
     apis = sd.query_hostapis()
-    return [
+    devices = [
         AudioDevice(
             i,
             d["name"],
@@ -55,6 +57,12 @@ def list_devices(backend: Any = None) -> list[AudioDevice]:
         )
         for i, d in enumerate(sd.query_devices())
     ]
+    if getattr(sd, "__name__", "") == "sounddevice":  # the real one, not a test double
+        from radio_web_remote.audio.usb_paths import usb_paths
+
+        paths = usb_paths([d.name for d in devices])
+        devices = [replace(d, usb_path=p) for d, p in zip(devices, paths, strict=True)]
+    return devices
 
 
 def _usable(d: AudioDevice, direction: Direction) -> bool:
@@ -66,7 +74,10 @@ def resolve(
     direction: Direction,
     devices: list[AudioDevice],
     preferred_api: str | None = None,
+    near: str | None = None,
 ) -> int | None:
+    """near: the USB path of the radio's serial port; "auto" then prefers the
+    codec on the same hub (every radio's codec has the same name)."""
     if ref is None:
         return None
     candidates = [d for d in devices if _usable(d, direction)]
@@ -84,6 +95,11 @@ def resolve(
         what = repr(ref)
     if len(hits) > 1 and preferred_api:
         hits = [d for d in hits if d.host_api == preferred_api] or hits
+    if len(hits) > 1 and ref == "auto" and near:
+        from radio_web_remote.audio.usb_paths import hub_of
+
+        hub = hub_of(near)
+        hits = [d for d in hits if d.usb_path and hub_of(d.usb_path) == hub] or hits
     if len(hits) == 1:
         return hits[0].index
     names = ", ".join(f"{d.index}: {d.name}" for d in candidates) or "none"

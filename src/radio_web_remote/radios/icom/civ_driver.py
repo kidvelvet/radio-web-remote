@@ -120,6 +120,7 @@ class IcomCivDriver(RadioDriver):
         auto_detect_address: bool = False,
     ) -> None:
         super().__init__()
+        self._detect_note: str | None = None  # why address auto-detect found nothing
         self.auto_detect_address = auto_detect_address
         self._detected: list[tuple[int, bytes]] = []  # (address, ID) seen while detecting
         self._detecting = False
@@ -163,14 +164,21 @@ class IcomCivDriver(RadioDriver):
         # ADR D6 item 6: TX off is the first thing on the wire after (re)connect.
         # This is what clears a key left by a crashed process (H7300-4, case C).
         # Confirm it, but do not fail the connect if the radio is silent.
+        self.connect_problem = None
+        self._detect_note = None
         try:
             await self.unkey(verify=True)
         except RadioTimeout as exc:
             if not (self.auto_detect_address and await self._detect_address()):
-                log.warning(
-                    "TX off on connect not confirmed: %s. If the radio is on, check its CI-V "
-                    "address (menu) against civ_address, or set auto_detect_address: true.",
-                    exc,
+                hint = "check its CI-V address (menu) against civ_address"
+                if self._detect_note:
+                    hint += f" (address auto-detect got {self._detect_note})"
+                elif not self.model.supports(CivCommand.READ_ID):
+                    hint += f" (the {self.model.name} cannot be found by auto-detect)"
+                elif not self.auto_detect_address:
+                    hint += ", or set auto_detect_address: true"
+                self.connect_problem = (
+                    f"TX off on connect not confirmed: {exc}. If the radio is on, {hint}."
                 )
         if self.model.supports(CivCommand.SCOPE_BAND):
             with contextlib.suppress(RadioError):
@@ -200,8 +208,7 @@ class IcomCivDriver(RadioDriver):
         answered the broadcast from 94 with ID A4 (H705-1). TX off goes to the
         found address straight away.
         """
-        if not self.model.supports(CivCommand.READ_ID):
-            log.warning("%s: address auto-detect needs 19 00, not in its table", self.model.name)
+        if not self.model.supports(CivCommand.READ_ID):  # said in connect_problem
             return False
         self._detected.clear()
         self._detecting = True
@@ -213,12 +220,8 @@ class IcomCivDriver(RadioDriver):
         finally:
             self._detecting = False
         found = {addr for addr, _ in self._detected}
-        if len(found) != 1:
-            log.warning(
-                "%s: address auto-detect got %s",
-                self.model.name,
-                "no answer" if not found else f"answers from {sorted(found)}",
-            )
+        if len(found) != 1:  # said in connect_problem (once per outage, not every retry)
+            self._detect_note = "no answer" if not found else f"answers from {sorted(found)}"
             return False
         old, self.address = self.address, found.pop()
         log.warning(

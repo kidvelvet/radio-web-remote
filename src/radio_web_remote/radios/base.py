@@ -130,6 +130,9 @@ class Unsupported(RadioError):
 class RadioDriver(ABC):
     def __init__(self) -> None:
         self._listeners: list[StateListener] = []
+        # Set by connect() for a problem it noticed but did not fail on (TX off
+        # not confirmed). The caller logs it: once per outage, not every retry.
+        self.connect_problem: str | None = None
 
     @property
     @abstractmethod

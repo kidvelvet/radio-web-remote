@@ -74,6 +74,9 @@ class IcomSimulator:
     echo_back: bool = False
     transceive: bool = True
     silent: bool = False  # answer nothing (timeout tests)
+    # Switched off with USB in: the radio's USB interface stays powered and
+    # answers every command NG (IC-7300, seen 2026-11-14).
+    powered_off: bool = False
     # Observed on an IC-7300 over USB (2026-11-13): the reply comes a few ms
     # after the command, and a command arriving before that reply is sent
     # goes unanswered. Runners deliver replies after reply_delay_s.
@@ -120,7 +123,7 @@ class IcomSimulator:
             self.received.append(frame)
             if self.silent:
                 continue
-            reply = self._handle(frame, now)
+            reply = bytes([NG]) if self.powered_off else self._handle(frame, now)
             if reply is not None:
                 out += encode_frame(frame.from_addr, self.addr, reply)
                 self._busy_until = now + self.reply_delay_s

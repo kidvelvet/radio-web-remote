@@ -352,7 +352,7 @@ async def check_radio(
 ) -> None:
     t = f"Radio {rc.id!r} ({rc.driver})"
     from radio_web_remote.radios import registry
-    from radio_web_remote.radios.base import RadioError
+    from radio_web_remote.radios.base import RadioError, RadioRejected
 
     try:
         port = resolve_port(rc.match, ports, model_for_driver(rc.driver))
@@ -399,6 +399,15 @@ async def check_radio(
                 "digital-mode software), then run doctor again.",
             )
             return
+        if isinstance(exc, RadioRejected):  # its USB answers, the radio does not
+            report.add(
+                "fail",
+                t,
+                f"the radio answers but refuses commands: {exc}",
+                f"{rc.id}: switch the radio on. Switched off, its USB port stays powered "
+                "and refuses every command.",
+            )
+            return
         report.add(
             "fail",
             t,
@@ -412,6 +421,8 @@ async def check_radio(
             await driver.close()
     address = getattr(driver, "address", None)
     report.add("ok", t, f"CI-V answer: {hz / 1e6:.6f} MHz {mode.mode.value} (TX off sent first)")
+    if driver.connect_problem:
+        report.add("warn", t, driver.connect_problem)
     default = getattr(getattr(driver, "model", None), "default_address", None)
     wanted = expected if expected is not None else (default.value if default else None)
     if address is not None and wanted is not None and address != wanted:
@@ -425,9 +436,12 @@ async def check_radio(
     if not rc.audio.enabled:
         report.add("info", t, "radio audio disabled in config")
         return
+    from radio_web_remote.audio.usb_paths import hub_of, serial_usb_path
+
+    near = serial_usb_path(next((p.location for p in ports if p.device == port), None))
     for direction, ref in (("input", rc.audio.input_device), ("output", rc.audio.output_device)):
         try:
-            index = resolve(ref, direction, devices)  # type: ignore[arg-type]
+            index = resolve(ref, direction, devices, near=near)  # type: ignore[arg-type]
         except AudioDeviceError as exc:
             report.add(
                 "fail",
@@ -437,7 +451,11 @@ async def check_radio(
                 "(see `radio-web-remote audio devices`).",
             )
             continue
-        report.add("ok", t, f"audio {direction}: device {index}")
+        dev = next((d for d in devices if d.index == index), None)
+        where = ""
+        if ref == "auto" and near and dev and dev.usb_path and hub_of(dev.usb_path) == hub_of(near):
+            where = f" ({dev.name} on the radio's USB hub, {hub_of(near)})"
+        report.add("ok", t, f"audio {direction}: device {index}{where}")
         if direction == "input" and index is not None and listen_audio is not None:
             peak = listen_audio(index)
             if peak is None:

@@ -65,6 +65,21 @@ class RadioLost(ConnectionError):
     pass
 
 
+class RadioOff(RadioLost):
+    """The radio answers, but refuses even reading its frequency.
+
+    Seen on an IC-7300 switched off with its USB cable in (2026-11-14): the USB
+    interface stays powered and answers every command NG. The server reconnects
+    by itself once the radio is switched on.
+    """
+
+    def __init__(self, model: str) -> None:
+        super().__init__(
+            f"{model} is not accepting commands: probably switched off. "
+            "It reconnects by itself when switched on."
+        )
+
+
 STABLE_LINK_S = 10.0  # a link up this long resets the reconnect backoff
 NG_BEFORE_SKIP = 3  # a slow item answered NG this many times in a row is skipped
 SCOPE_RETRY_S = 5.0  # a scope on/off the radio refused is retried this often
@@ -168,6 +183,10 @@ class RadioStation:
         self._recheck_hz: int | None = None
         self._recheck_task: asyncio.Task[None] | None = None
         self._connected_at = 0.0
+        self._down_reason: str | None = None  # the last outage, logged once
+        self._was_off = False  # the last outage was a radio switched off
+        self._start_logged = False  # "starting up?" said for this outage
+        self._connect_problem: str | None = None
         self.tx = TxController(
             cfg.id,
             _PttProxy(self),
@@ -255,9 +274,28 @@ class RadioStation:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning("radio %s link lost: %s", self.cfg.id, exc)
+                reason = str(exc) or type(exc).__name__
+                # Once per outage: a radio switched off is retried every few
+                # seconds, and each retry fails the same way.
+                if isinstance(exc, RadioOff):
+                    self._was_off, self._start_logged = True, False
+                if self._was_off and isinstance(exc, RadioTimeout):
+                    # Switched on again: silent for a few seconds while it starts
+                    # (IC-7300, 2026-11-14). Not an address problem; keep the page's text.
+                    if not self._start_logged:
+                        log.info("radio %s not answering yet (starting up?): %s", self.cfg.id, exc)
+                        self._start_logged = True
+                    reason = self._down_reason or reason
+                elif reason != self._down_reason:
+                    extra = ""
+                    if self._connect_problem and not isinstance(exc, RadioOff):
+                        extra = f" ({self._connect_problem})"
+                    log.warning("radio %s link lost: %s%s", self.cfg.id, reason, extra)
+                else:
+                    log.debug("radio %s still down: %s", self.cfg.id, reason)
+                self._down_reason = reason
                 self._connected = False
-                self._update(connected=False, error=str(exc) or type(exc).__name__)
+                self._update(connected=False, error=reason)
                 await self.tx.radio_lost()
                 await self._drop_driver()
             if self._connected_once and self._loop_time() - self._connected_at >= STABLE_LINK_S:
@@ -283,9 +321,18 @@ class RadioStation:
         transport.on_error = lambda exc: lost.set()
         self._driver = driver
         await driver.connect()  # TX off first
+        self._connect_problem = driver.connect_problem
         driver.add_listener(self._on_radio_event)
-        hz = await driver.get_frequency()
-        mode = await driver.get_mode()
+        try:
+            hz = await driver.get_frequency()
+            mode = await driver.get_mode()
+        except RadioRejected as exc:
+            raise RadioOff(driver.model_name) from exc
+        if self._connect_problem:
+            log.warning("radio %s: %s", self.cfg.id, self._connect_problem)
+        log.info("radio %s connected%s", self.cfg.id, " again" if self._down_reason else "")
+        self._down_reason = None
+        self._was_off = False
         self._connected = True
         self._connected_once = True
         self._connected_at = self._loop_time()
@@ -319,6 +366,7 @@ class RadioStation:
         meters = asyncio.create_task(self._meter_loop(driver), name=f"meters-{self.cfg.id}")
         try:
             timeouts = 0
+            rejected = 0  # basic reads refused in a row: the radio was switched off
             turn = 0
             while True:
                 with contextlib.suppress(TimeoutError):
@@ -333,9 +381,15 @@ class RadioStation:
                     if slow:  # one slow item per tick, round robin
                         await self._poll_slow(driver, slow[turn % len(slow)])
                         turn += 1
-                    timeouts = 0
+                    timeouts = rejected = 0
                 except (RadioBadReply, RadioRejected) as exc:  # e.g. a late FA: not a lost link
-                    log.warning("radio %s: unexpected reply, poll skipped: %s", self.cfg.id, exc)
+                    rejected = rejected + 1 if isinstance(exc, RadioRejected) else 0
+                    if rejected >= self._lost_after:
+                        raise RadioOff(driver.model_name) from exc
+                    if rejected <= 1:
+                        log.warning(
+                            "radio %s: unexpected reply, poll skipped: %s", self.cfg.id, exc
+                        )
                 except RadioTimeout:
                     timeouts += 1
                     if timeouts >= self._lost_after:

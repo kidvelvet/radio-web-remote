@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Several radios on one computer (macOS, Linux): `auto` audio picks the codec
+  on the same USB hub as the radio's serial port. All Icom codecs have the
+  same name, and device numbers change when other devices come and go (an
+  iPhone offered as a microphone, for one). doctor says which hub it matched.
+- A radio switched off with its USB cable in refuses every command. The page
+  and the log now say it is probably switched off, once, instead of blaming
+  the CI-V address every few seconds; the log says when it is back. doctor
+  says to switch it on.
 - An audio device written as a quoted number (`input_device: "3"`) is an
   index. It was read as part of a name, so "3" could pick "CalDigit
   Thunderbolt 3 Audio", and doctor reported it as fine.

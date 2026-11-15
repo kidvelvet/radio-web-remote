@@ -105,6 +105,39 @@ async def test_unanswering_radio_fails_with_a_fix():
     assert "What to fix" in r.render()
 
 
+async def test_switched_off_radio_says_switch_it_on():
+    """An IC-7300 switched off with USB in answers every command NG (2026-11-14)."""
+    sim = IcomSimulator(IC705, powered_off=True)
+    rc = RadioConfig(id="ic705", driver="icom.ic705", match=SerialMatch(port="/dev/cu.usbmodem101"))
+    r = doctor.Report()
+    await doctor.check_radio(r, rc, [IC705_A], CODECS, _sim_factory(sim))
+    assert r.failed
+    assert any("refuses commands" in f.text for f in r.findings)
+    assert any(f.fix and "switch the radio on" in f.fix for f in r.findings)
+    assert not any(f.fix and "CI-V Address matches" in f.fix for f in r.findings)
+
+
+async def test_two_radios_auto_audio_by_usb_hub():
+    """Both codecs are "USB Audio CODEC"; doctor picks the one on the radio's hub."""
+    sim = IcomSimulator(IC705)
+    port = PortInfo("/dev/cu.usbmodem101", "IC-705", "IC-705 22222222", "34-3.1", 0x0C26, 0x36)
+    devices = [
+        AudioDevice(1, "USB Audio CODEC", 0, 2, "Core Audio", "32-3.4"),
+        AudioDevice(2, "USB Audio CODEC", 2, 0, "Core Audio", "32-3.4"),
+        AudioDevice(3, "USB Audio CODEC", 0, 2, "Core Audio", "34-3.4"),
+        AudioDevice(4, "USB Audio CODEC", 2, 0, "Core Audio", "34-3.4"),
+    ]
+    rc = RadioConfig(
+        id="ic705", driver="icom.ic705", match=SerialMatch(usb_serial="IC-705 22222222")
+    )
+    r = doctor.Report()
+    await doctor.check_radio(r, rc, [port], devices, _sim_factory(sim), listen_audio=lambda i: 0.2)
+    assert not r.failed, r.render()
+    texts = [f.text for f in r.findings]
+    assert "audio input: device 4 (USB Audio CODEC on the radio's USB hub, 34-3)" in texts
+    assert "audio output: device 3 (USB Audio CODEC on the radio's USB hub, 34-3)" in texts
+
+
 def test_busy_https_port_is_reported():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

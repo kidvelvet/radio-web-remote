@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -47,6 +48,22 @@ def _sim_factory(sim: IcomSimulator) -> ByteTransport:
     return loopback_transport(sim)
 
 
+def _radio_usb_path(rc: RadioConfig) -> str | None:
+    """USB path of the radio's serial port, for telling its codec from others'."""
+    from radio_web_remote.audio.usb_paths import serial_usb_path
+    from radio_web_remote.devices.serial_ports import (
+        list_serial_ports,
+        model_for_driver,
+        resolve_port,
+    )
+
+    with contextlib.suppress(Exception):  # no port yet: "auto" works as without it
+        ports = list_serial_ports()
+        device = resolve_port(rc.match, ports, model_for_driver(rc.driver))
+        return serial_usb_path(next(p.location for p in ports if p.device == device))
+    return None
+
+
 def _real_audio(
     cfg: Config, rc: RadioConfig
 ) -> tuple[AudioBackend | None, AudioBackend | None, str | None]:
@@ -56,7 +73,11 @@ def _real_audio(
     # Devices are looked up when audio starts and again on every retry, so a
     # radio that is off when the server starts gets audio once it is switched on.
     radio = SoundDeviceBackend(
-        None, None, f"{rc.id} codec", refs=(rc.audio.input_device, rc.audio.output_device)
+        None,
+        None,
+        f"{rc.id} codec",
+        refs=(rc.audio.input_device, rc.audio.output_device),
+        near=lambda: _radio_usb_path(rc),
     )
     host = None
     h = cfg.host_audio

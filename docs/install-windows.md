@@ -52,9 +52,10 @@ radio-web-remote doctor
 `%LOCALAPPDATA%\radio-web-remote\config.yaml`. Set up the radio's menus first:
 [radio-setup.md](radio-setup.md). On Windows the codec shows as a generic
 "USB Audio CODEC"; with more than one radio, set each radio's audio devices
-by index (`radio-web-remote audio devices`). An index is a plain number, such as
-`input_device: 4`; a number in quotes is read as an index too, never as part
-of a name.
+by index (`radio-web-remote audio devices`). An index is a plain number, such
+as `input_device: 4`; a number in quotes is read as an index too, never as
+part of a name. (On macOS and Linux, `auto` tells radios apart by USB hub;
+on Windows it cannot yet.)
 
 ## 4. Start at logon (optional)
 

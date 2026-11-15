@@ -152,6 +152,48 @@ async def test_silent_radio_marks_disconnected_then_recovers(bench):
     assert bench.station.state.error is None
 
 
+async def test_radio_switched_off_says_so_and_logs_once(bench, caplog):
+    """IC-7300 switched off, USB in (2026-11-14): every command answered NG.
+    The server blamed the CI-V address and logged three warnings every 5 s."""
+    caplog.set_level("DEBUG", logger="radio_web_remote")
+    bench.sim.powered_off = True
+    await wait_for(lambda: not bench.station.state.connected)
+    assert "probably switched off" in bench.station.state.error
+    tries = len(bench.links)
+    await wait_for(lambda: len(bench.links) >= tries + 4, timeout=5.0)  # it keeps retrying
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert sum("link lost" in w for w in warnings) == 1, warnings
+    assert not any("CI-V address" in w or "auto-detect" in w for w in warnings), warnings
+    assert sum("poll skipped" in w for w in warnings) <= 1, warnings
+    # Switched on: silent for a few seconds while it starts, then answers.
+    bench.sim.powered_off, bench.sim.silent = False, True
+    tries = len(bench.links)
+    await wait_for(lambda: len(bench.links) >= tries + 3, timeout=5.0)
+    assert "probably switched off" in bench.station.state.error  # the page keeps saying so
+    bench.sim.silent = False
+    await wait_for(lambda: bench.station.state.connected, timeout=3.0)
+    assert bench.station.state.error is None
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("ic7300 connected again" in m for m in messages)
+    assert sum("starting up?" in m for m in messages) == 1, messages
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert not any("CI-V address" in w for w in warnings), warnings
+    assert sum("link lost" in w for w in warnings) == 1, warnings
+
+
+async def test_silent_radio_names_the_address_once(bench, caplog):
+    """A radio that does not answer at all: the CI-V address hint, once."""
+    caplog.set_level("WARNING", logger="radio_web_remote")
+    bench.sim.silent = True
+    await wait_for(lambda: not bench.station.state.connected)
+    tries = len(bench.links)
+    await wait_for(lambda: len(bench.links) >= tries + 3, timeout=5.0)
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    hints = [w for w in warnings if "check its CI-V address" in w]
+    assert len(hints) == 1, warnings
+    assert "cannot be found by auto-detect" in hints[0]  # the IC-7300 has no 19 00
+
+
 async def test_controls_refused_while_disconnected(bench):
     bench.sim.silent = True
     await wait_for(lambda: not bench.station.state.connected)

@@ -121,14 +121,18 @@ class SoundDeviceBackend(AudioBackend):
         output_device: int | None,
         label: str,
         refs: tuple[str | int | None, str | int | None] | None = None,
+        near: Callable[[], str | None] | None = None,
     ) -> None:
         """refs: config references ("auto", a name, an index) to look up again on each
-        start, so a radio switched on after the server still gets audio."""
+        start, so a radio switched on after the server still gets audio.
+        near: the USB path of the radio's serial port, asked at each lookup, so
+        "auto" finds this radio's codec among several (audio/usb_paths.py)."""
         super().__init__()
         self.input_device = input_device
         self.output_device = output_device
         self.label = label
         self.refs = refs
+        self.near = near
         self._streams: list[Any] = []
         self._last_callback = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -159,8 +163,9 @@ class SoundDeviceBackend(AudioBackend):
         api = None
         with contextlib.suppress(Exception):
             api = sd.query_hostapis(sd.default.hostapi)["name"]
-        self.input_device = resolve(self.refs[0], "input", devices, api)
-        self.output_device = resolve(self.refs[1], "output", devices, api)
+        near = self.near() if self.near is not None else None
+        self.input_device = resolve(self.refs[0], "input", devices, api, near)
+        self.output_device = resolve(self.refs[1], "output", devices, api, near)
 
     async def start(self) -> None:
         import sounddevice as sd
