@@ -67,5 +67,5 @@ radios: []
 #     ptt_method: civ              # only civ in 0.1 (DTR/RTS keying is planned)
 #     audio:
 #       enabled: true
-#       input_device: auto         # the radio's "USB Audio CODEC"; or a name or index
+#       input_device: auto         # the radio's "USB Audio CODEC"; or part of a name, or an index (a number)
 #       output_device: auto        # see: radio-web-remote audio devices

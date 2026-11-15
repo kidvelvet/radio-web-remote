@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- An audio device written as a quoted number (`input_device: "3"`) is an
+  index. It was read as part of a name, so "3" could pick "CalDigit
+  Thunderbolt 3 Audio", and doctor reported it as fine.
 - Docs: set the radio's USB AF SQL to ON so FM receive audio goes quiet when
   squelched (radio-setup.md, troubleshooting.md).
 

@@ -1,5 +1,9 @@
 """Find audio devices by config reference: "auto", a name substring, or an index.
 
+A reference made only of digits is an index, quoted or not: YAML reads
+`input_device: "3"` as a string, and as a name it would match any device with
+a 3 in its name ("CalDigit Thunderbolt 3 Audio", seen 2026-11-14).
+
 "auto" means the only device for that direction whose name contains
 "USB Audio CODEC" (PortAudio decorates it on Linux, e.g. "USB Audio CODEC:
 USB Audio (hw:2,0)", and Windows, e.g. "Microphone (USB Audio CODEC)"; TODO(verify)
@@ -66,6 +70,8 @@ def resolve(
     if ref is None:
         return None
     candidates = [d for d in devices if _usable(d, direction)]
+    if isinstance(ref, str) and ref.strip().isdecimal():
+        ref = int(ref.strip())
     if isinstance(ref, int):
         if any(d.index == ref for d in candidates):
             return ref

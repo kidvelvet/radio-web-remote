@@ -77,6 +77,17 @@ def test_resolve_by_name_and_index():
     assert resolve(None, "input", DEVICES) is None
 
 
+def test_resolve_quoted_index_is_an_index_not_a_name():
+    """A quoted number in config.yaml is a string. As a name, "3" matched
+    "CalDigit Thunderbolt 3 Audio" on the maintainer's Mac and doctor said ok."""
+    devs = [*DEVICES, AudioDevice(5, "CalDigit Thunderbolt 3 Audio", 0, 2, "Core Audio")]
+    assert resolve("3", "output", devs) == 3
+    assert resolve(" 4 ", "input", devs) == 4
+    with pytest.raises(AudioDeviceError, match="index 3"):
+        resolve("3", "input", devs)  # device 3 is output only: never a name match
+    assert resolve("Thunderbolt 3", "output", devs) == 5  # names with digits still work
+
+
 def test_resolve_errors():
     with pytest.raises(AudioDeviceError, match="index 0"):
         resolve(0, "input", DEVICES)  # speakers have no input
